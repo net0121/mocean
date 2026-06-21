@@ -35,8 +35,10 @@ html,body{
   align-items:center;
   justify-content:center;
   z-index:100;
-  backdrop-filter:blur(8px);
-  background:rgba(0,0,0,0.4);
+  backdrop-filter:blur(10px) saturate(1.15);
+  -webkit-backdrop-filter:blur(10px) saturate(1.15);
+  background:rgba(2,16,25,0.28);
+  transition:backdrop-filter 0.3s ease;
 }
 
 .screen-active {
@@ -49,6 +51,11 @@ html,body{
   pointer-events:none;
 }
 
+.pregame-hidden {
+  opacity:0 !important;
+  pointer-events:none !important;
+}
+
 .title-content, .options-content {
   text-align:center;
   background:rgba(6,18,28,0.92);
@@ -59,21 +66,45 @@ html,body{
 }
 
 .watery-title {
+  position:relative;
   font-size:72px;
   font-weight:700;
   margin:0 0 40px 0;
-  background:linear-gradient(135deg, #7fe8d4, #72d0ff, #5fa8ff);
+  background:linear-gradient(120deg, #7fe8d4, #72d0ff, #5fa8ff, #9be8ff, #72d0ff, #7fe8d4);
+  background-size:300% 100%;
   -webkit-background-clip:text;
   -webkit-text-fill-color:transparent;
   background-clip:text;
   text-shadow:0 0 20px rgba(127,232,212,0.3);
-  animation:wave 3s ease-in-out infinite;
+  animation:wave 3.4s ease-in-out infinite, shimmer 5s linear infinite;
   letter-spacing:4px;
 }
 
+/* Subtle ripple distortion layered behind the title text for a watery feel */
+.watery-title::after{
+  content:attr(data-text);
+  position:absolute;
+  left:0; top:0; width:100%;
+  background:inherit;
+  background-clip:text;
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+  opacity:0.45;
+  filter:blur(6px);
+  animation:wave 3.4s ease-in-out infinite reverse, shimmer 5s linear infinite;
+  pointer-events:none;
+}
+
 @keyframes wave {
-  0%, 100% { transform:translateY(0px); }
-  50% { transform:translateY(-10px); }
+  0%, 100% { transform:translateY(0px) skewX(0deg); }
+  25% { transform:translateY(-6px) skewX(0.6deg); }
+  50% { transform:translateY(-10px) skewX(0deg); }
+  75% { transform:translateY(-4px) skewX(-0.6deg); }
+}
+
+@keyframes shimmer {
+  0% { background-position:0% 50%; }
+  100% { background-position:300% 50%; }
 }
 
 .play-btn, .options-btn, .back-btn {
@@ -155,21 +186,20 @@ html,body{
   color:var(--foam);
 }
 
-/* ============================= COMMAND PROMPT ============================= */
+/* ============================= COMMAND PROMPT (Minecraft-style chat) ============================= */
 
 #command-prompt {
   position:fixed;
   bottom:0;
   left:0;
-  right:0;
-  background:rgba(0,0,0,0.95);
-  border-top:2px solid #0f0;
+  width:min(560px, 100%);
   font-family:'Roboto Mono', monospace;
   z-index:50;
-  max-height:40vh;
+  max-height:46vh;
   display:flex;
   flex-direction:column;
-  transition:opacity 0.2s;
+  background:transparent;
+  border-top:none;
 }
 
 .command-hidden {
@@ -181,45 +211,60 @@ html,body{
   display:flex;
   flex-direction:column;
   height:100%;
-  padding:12px;
+  padding:0;
 }
 
 #command-output {
   flex:1;
   overflow-y:auto;
-  color:#0f0;
+  display:flex;
+  flex-direction:column;
+  justify-content:flex-end;
+  gap:1px;
+  padding:6px 8px;
+  background:rgba(0,0,0,0.5);
+  color:#e0e0e0;
   font-size:13px;
-  line-height:1.4;
-  margin-bottom:8px;
+  line-height:1.45;
+  margin:0;
   word-wrap:break-word;
+  text-shadow:1px 1px 0 rgba(0,0,0,0.6);
 }
 
+#command-output .line{ padding:1px 0; }
+#command-output .line.echo{ color:#ffffff; }
+#command-output .line.info{ color:#e0e0e0; }
+#command-output .line.ok{ color:#7dff9e; }
+#command-output .line.err{ color:#ff6b6b; }
+#command-output .line.fun{ color:#ffd166; }
+
 #command-output::-webkit-scrollbar {
-  width:8px;
+  width:6px;
 }
 
 #command-output::-webkit-scrollbar-track {
-  background:rgba(15,255,0,0.1);
+  background:transparent;
 }
 
 #command-output::-webkit-scrollbar-thumb {
-  background:#0f0;
-  border-radius:4px;
+  background:rgba(255,255,255,0.25);
+  border-radius:3px;
 }
 
 #command-input {
-  background:transparent;
+  background:rgba(0,0,0,0.5);
   border:none;
-  border-top:1px solid #0f0;
-  color:#0f0;
+  color:#ffffff;
   font-family:'Roboto Mono', monospace;
   font-size:13px;
-  padding:8px 4px;
+  padding:7px 8px;
   outline:none;
+  width:100%;
+  box-sizing:border-box;
 }
 
 #command-input::placeholder {
-  color:#0f044d;
+  color:rgba(255,255,255,0.45);
 }
 
 /* ============================= HUD ============================= */
@@ -232,6 +277,7 @@ html,body{
   pointer-events:none;
   user-select:none;
   z-index:5;
+  transition:opacity 0.6s ease;
 }
 #hud .label{ opacity:0.65; font-size:11px; text-transform:uppercase; letter-spacing:1.5px; }
 #hud .value{ font-size:20px; font-weight:600; }
@@ -243,6 +289,7 @@ html,body{
   border-radius:6px;
   pointer-events:none;
   z-index:5;
+  transition:opacity 0.6s ease;
 }
 #depthdot{
   position:absolute; left:-3px; width:16px; height:16px;
@@ -287,6 +334,7 @@ html,body{
   grid-template-rows:48px 48px;
   gap:6px;
   z-index:10;
+  transition:opacity 0.6s ease;
 }
 #touch-controls button{
   width:48px; height:48px; border-radius:12px;
