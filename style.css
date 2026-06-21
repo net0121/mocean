@@ -9,10 +9,6 @@ html,body{
   font-family:'Trebuchet MS', 'Segoe UI', sans-serif;
 }
 
-/* Depth-based water color lives here as a plain CSS gradient, updated each
-   frame from JS. Pixi's canvas renders on top of it with a transparent
-   background, so we get the gradient "for free" instead of redrawing it
-   on every frame in canvas/WebGL. */
 #water-bg{
   position:fixed; inset:0;
   z-index:0;
@@ -63,13 +59,14 @@ html,body{
   border-radius:12px;
   padding:60px 80px;
   box-shadow:0 0 40px rgba(0,0,0,0.8);
+  position:relative;
 }
 
 .watery-title {
   position:relative;
   font-size:72px;
   font-weight:700;
-  margin:0 0 40px 0;
+  margin:0 0 12px 0;
   background:linear-gradient(120deg, #7fe8d4, #72d0ff, #5fa8ff, #9be8ff, #72d0ff, #7fe8d4);
   background-size:300% 100%;
   -webkit-background-clip:text;
@@ -80,7 +77,6 @@ html,body{
   letter-spacing:4px;
 }
 
-/* Subtle ripple distortion layered behind the title text for a watery feel */
 .watery-title::after{
   content:attr(data-text);
   position:absolute;
@@ -93,6 +89,24 @@ html,body{
   filter:blur(6px);
   animation:wave 3.4s ease-in-out infinite reverse, shimmer 5s linear infinite;
   pointer-events:none;
+}
+
+.tagline {
+  color:rgba(223,246,255,0.65);
+  font-size:16px;
+  letter-spacing:2px;
+  margin:0 0 40px 0;
+  text-transform:uppercase;
+}
+
+.version {
+  position:absolute;
+  bottom:12px;
+  right:16px;
+  color:rgba(223,246,255,0.4);
+  font-size:11px;
+  font-family:'Roboto Mono', monospace;
+  letter-spacing:0.5px;
 }
 
 @keyframes wave {
@@ -186,7 +200,7 @@ html,body{
   color:var(--foam);
 }
 
-/* ============================= COMMAND PROMPT (Minecraft-style chat) ============================= */
+/* ============================= COMMAND PROMPT ============================= */
 
 #command-prompt {
   position:fixed;
@@ -238,18 +252,9 @@ html,body{
 #command-output .line.err{ color:#ff6b6b; }
 #command-output .line.fun{ color:#ffd166; }
 
-#command-output::-webkit-scrollbar {
-  width:6px;
-}
-
-#command-output::-webkit-scrollbar-track {
-  background:transparent;
-}
-
-#command-output::-webkit-scrollbar-thumb {
-  background:rgba(255,255,255,0.25);
-  border-radius:3px;
-}
+#command-output::-webkit-scrollbar { width:6px; }
+#command-output::-webkit-scrollbar-track { background:transparent; }
+#command-output::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.25); border-radius:3px; }
 
 #command-input {
   background:rgba(0,0,0,0.5);
@@ -263,9 +268,7 @@ html,body{
   box-sizing:border-box;
 }
 
-#command-input::placeholder {
-  color:rgba(255,255,255,0.45);
-}
+#command-input::placeholder { color:rgba(255,255,255,0.45); }
 
 /* ============================= HUD ============================= */
 
@@ -282,20 +285,68 @@ html,body{
 #hud .label{ opacity:0.65; font-size:11px; text-transform:uppercase; letter-spacing:1.5px; }
 #hud .value{ font-size:20px; font-weight:600; }
 
-#depthbar{
-  position:fixed; right:14px; top:50%; transform:translateY(-50%);
-  width:10px; height:220px;
-  border:1px solid rgba(223,246,255,0.4);
-  border-radius:6px;
-  pointer-events:none;
-  z-index:5;
-  transition:opacity 0.6s ease;
+/* Watery clock for day/night cycle */
+#daynight-clock {
+  width:48px;
+  height:48px;
+  margin-top:12px;
+  border-radius:50%;
+  border:2px solid rgba(223,246,255,0.35);
+  position:relative;
+  background:rgba(2,16,25,0.4);
+  overflow:hidden;
 }
-#depthdot{
-  position:absolute; left:-3px; width:16px; height:16px;
-  border-radius:50%; background:#ff9d5c;
-  box-shadow:0 0 8px rgba(255,157,92,0.8);
-  transition:top 0.08s linear;
+
+.clock-face {
+  position:absolute;
+  inset:0;
+  border-radius:50%;
+}
+
+.clock-sun {
+  position:absolute;
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  background:#ffd166;
+  box-shadow:0 0 8px rgba(255,209,102,0.6);
+  top:4px;
+  left:50%;
+  transform:translateX(-50%);
+}
+
+.clock-moon {
+  position:absolute;
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:#c8d6e5;
+  box-shadow:0 0 6px rgba(200,214,229,0.5);
+  bottom:4px;
+  left:50%;
+  transform:translateX(-50%);
+}
+
+.clock-hand {
+  position:absolute;
+  width:2px;
+  height:18px;
+  background:rgba(223,246,255,0.7);
+  bottom:50%;
+  left:50%;
+  transform-origin:bottom center;
+  transform:translateX(-50%) rotate(0deg);
+  border-radius:1px;
+}
+
+.clock-water-fill {
+  position:absolute;
+  bottom:0;
+  left:0;
+  right:0;
+  border-radius:0 0 50% 50%;
+  background:linear-gradient(to top, rgba(34,116,170,0.4), rgba(34,116,170,0.1));
+  transition:height 0.3s ease;
 }
 
 #creature-tooltip{
@@ -328,28 +379,63 @@ html,body{
 }
 #instructions.hide{ opacity:0; }
 
+/* ============================= TOUCH CONTROLS ============================= */
+
 #touch-controls{
-  position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
-  display:none; grid-template-columns:48px 48px 48px;
-  grid-template-rows:48px 48px;
-  gap:6px;
+  position:fixed;
+  bottom:0;
+  left:0;
+  width:100%;
+  height:100%;
   z-index:10;
+  pointer-events:none;
   transition:opacity 0.6s ease;
 }
-#touch-controls button{
-  width:48px; height:48px; border-radius:12px;
-  border:1px solid rgba(223,246,255,0.4);
-  background:rgba(6,18,28,0.55);
-  color:var(--foam); font-size:18px;
-  -webkit-tap-highlight-color:transparent;
-  user-select:none;
+
+.touch-area {
+  position:fixed;
+  bottom:20px;
+  left:50%;
+  transform:translateX(-50%);
+  width:200px;
+  height:200px;
+  border-radius:50%;
+  border:2px dashed rgba(223,246,255,0.25);
+  background:rgba(6,18,28,0.3);
+  pointer-events:auto;
+  touch-action:none;
 }
-#touch-controls button:active{ background:rgba(255,157,92,0.5); }
-#btn-up{ grid-column:2; grid-row:1; }
-#btn-left{ grid-column:1; grid-row:2; }
-#btn-down{ grid-column:2; grid-row:2; }
-#btn-right{ grid-column:3; grid-row:2; }
+
+.touch-hint {
+  position:fixed;
+  bottom:230px;
+  left:50%;
+  transform:translateX(-50%);
+  color:rgba(223,246,255,0.5);
+  font-size:13px;
+  letter-spacing:1px;
+  pointer-events:none;
+  text-transform:uppercase;
+}
+
+.touch-knob {
+  position:absolute;
+  width:48px;
+  height:48px;
+  border-radius:50%;
+  background:rgba(255,157,92,0.6);
+  border:2px solid rgba(255,157,92,0.8);
+  box-shadow:0 0 12px rgba(255,157,92,0.4);
+  pointer-events:none;
+  transform:translate(-50%, -50%);
+  transition:opacity 0.2s ease;
+}
 
 @media (pointer:coarse){
-  #touch-controls{ display:grid; }
+  .touch-area { display:block; }
+  .touch-hint { display:block; }
+}
+@media (pointer:fine){
+  .touch-area { display:none; }
+  .touch-hint { display:none; }
 }
