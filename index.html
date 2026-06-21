@@ -11,7 +11,6 @@
 </head>
 <body>
 
-  <!-- CSS handles the depth-gradient water color; Pixi's canvas sits on top, transparent -->
   <div id="water-bg"></div>
   <div id="pixi-root"></div>
 
@@ -19,8 +18,10 @@
   <div id="title-screen" class="screen-active">
     <div class="title-content">
       <h1 id="title-text" class="watery-title" data-text="mocean">mocean</h1>
+      <p class="tagline">Dive into the endless blue</p>
       <button id="play-button" class="play-btn">Play</button>
       <button id="options-button" class="options-btn">Options</button>
+      <div class="version">v1.2.0</div>
     </div>
   </div>
 
@@ -57,22 +58,18 @@
   <div id="hud">
     <div class="label">Depth</div>
     <div class="value"><span id="depthVal">0</span> m</div>
+    <div id="daynight-clock"></div>
   </div>
-
-  <div id="depthbar"><div id="depthdot"></div></div>
 
   <div id="creature-tooltip"></div>
 
-  <div id="instructions">Arrow keys to swim &nbsp;•&nbsp; hold a direction to accelerate &nbsp;•&nbsp; breach to flip or press Space &nbsp;•&nbsp; Tab for debug &nbsp;•&nbsp; / for commands</div>
+  <div id="instructions">Arrow keys to swim &nbsp;&bull;&nbsp; hold a direction to accelerate &nbsp;&bull;&nbsp; breach to flip or press Space &nbsp;&bull;&nbsp; Tab for debug &nbsp;&bull;&nbsp; / for commands</div>
 
   <div id="touch-controls">
-    <button id="btn-up">&#9650;</button>
-    <button id="btn-left">&#9664;</button>
-    <button id="btn-down">&#9660;</button>
-    <button id="btn-right">&#9654;</button>
+    <div class="touch-area" id="touch-area"></div>
+    <div class="touch-hint">Drag anywhere to swim</div>
   </div>
 
-  <!-- Command Prompt -->
   <div id="command-prompt" class="command-hidden">
     <div class="command-container">
       <div class="command-output" id="command-output"></div>
@@ -80,7 +77,6 @@
     </div>
   </div>
 
-  <!-- PixiJS v7 (rendering engine: scene graph, camera transforms, Graphics/line drawing) -->
   <script src="https://cdn.jsdelivr.net/npm/pixi.js@7.x/dist/pixi.min.js"></script>
   <script src="game.js"></script>
 </body>
