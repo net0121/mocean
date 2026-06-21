@@ -132,7 +132,7 @@ debugDisplay.style.cssText = `
 document.body.appendChild(debugDisplay);
 
 window.addEventListener('keydown', (e)=>{
-  if(e.key === 'Tab'){
+  if(e.key === 'Tab' && gameStarted && !commandOpen){
     e.preventDefault();
     debugMode = !debugMode;
     debugDisplay.style.display = debugMode ? 'block' : 'none';
@@ -157,11 +157,28 @@ function updateDebugDisplay(){
   `;
 }
 
+/* ============================= GAME / UI STATE ============================= */
+
+let gameStarted = false;     // true once Play is pressed - gates player input & visibility
+let commandOpen = false;     // true while the Minecraft-style command prompt is open
+
 /* ============================= INPUT ============================= */
 
 const keys = { up:false, down:false, left:false, right:false, space:false };
 
 window.addEventListener('keydown', (e)=>{
+  // While the command prompt is focused, let it own all keystrokes -
+  // arrow keys/space shouldn't also drive the player underneath it.
+  if(commandOpen) return;
+
+  if(gameStarted && e.key === '/'){
+    e.preventDefault();
+    openCommandPrompt();
+    return;
+  }
+
+  if(!gameStarted) return; // ignore swim input until Play is pressed
+
   switch(e.key){
     case 'ArrowUp': keys.up=true; e.preventDefault(); break;
     case 'ArrowDown': keys.down=true; e.preventDefault(); break;
@@ -173,6 +190,7 @@ window.addEventListener('keydown', (e)=>{
 }, {passive:false});
 
 window.addEventListener('keyup', (e)=>{
+  if(commandOpen || !gameStarted) return;
   switch(e.key){
     case 'ArrowUp': keys.up=false; break;
     case 'ArrowDown': keys.down=false; break;
@@ -184,7 +202,7 @@ window.addEventListener('keyup', (e)=>{
 
 function bindTouchBtn(id, key){
   const el = document.getElementById(id);
-  const set = (v)=> (e)=>{ keys[key]=v; hideInstructions(); e.preventDefault(); };
+  const set = (v)=> (e)=>{ if(!gameStarted) return; keys[key]=v; hideInstructions(); e.preventDefault(); };
   el.addEventListener('touchstart', set(true), {passive:false});
   el.addEventListener('touchend', set(false), {passive:false});
   el.addEventListener('touchcancel', set(false), {passive:false});
@@ -203,7 +221,6 @@ function hideInstructions(){
   instructionsHidden = true;
   document.getElementById('instructions').classList.add('hide');
 }
-setTimeout(hideInstructions, 6000);
 
 /* ============================= CREATURE HOVER TOOLTIP ============================= */
 
@@ -249,38 +266,49 @@ function drawFishShape(g, size, colors, tailPhase, speedFrac, bank){
   const s = size;
   const speed = clamp(speedFrac, 0, 1);
 
-  const wagAmp = 0.32 + speed*0.6;
-  const wag = Math.sin(tailPhase) * wagAmp;
-  const wagTip = Math.sin(tailPhase - 1.1) * wagAmp * 0.85;
+  // Traveling sine wave down the spine, like a real swimming fish, rather
+  // than a single bend point - this gives a much more natural S-curve.
+  const wagAmp = 0.30 + speed*0.55;
+  const waveAt = (xFrac, lag) => Math.sin(tailPhase - lag + xFrac*1.6) * wagAmp;
 
-  const bodyWave = Math.sin(tailPhase*0.5) * s * 0.05 * (0.35 + speed);
+  const wagMid = waveAt(0.55, 0);          // mid-body curve
+  const wagJoint = waveAt(0.85, 0.55);     // tail joint
+  const wagTip = waveAt(1.0, 1.05);        // tail tip (lags behind the joint)
+
+  const bodyWave = Math.sin(tailPhase*0.5) * s * 0.045 * (0.35 + speed);
   const stretch = 1 + speed*0.07;
 
-  // tail fin
+  // tail fin - double curve so it whips through with a bit of lag/flex
   const baseX = -s*0.85;
-  const jointX = -s*1.3*stretch, jointY = wag*s*0.6;
-  const tipX = -s*1.9*stretch, tipY = wag*s*0.6 + wagTip*s*0.9;
+  const jointX = -s*1.3*stretch, jointY = wagJoint*s*0.62;
+  const tipX = -s*1.95*stretch, tipY = wagJoint*s*0.62 + wagTip*s*0.95;
   g.beginFill(colors.fin, 0.92);
-  g.moveTo(baseX, -s*0.16);
-  g.quadraticCurveTo(jointX, jointY - s*0.22, tipX, tipY - s*0.04);
-  g.quadraticCurveTo(jointX, jointY + s*0.22, baseX, s*0.16);
+  g.moveTo(baseX, -s*0.16 + wagMid*s*0.08);
+  g.quadraticCurveTo(jointX, jointY - s*0.24, tipX, tipY - s*0.05);
+  g.quadraticCurveTo(jointX, jointY + s*0.24, baseX, s*0.16 + wagMid*s*0.08);
   g.closePath();
   g.endFill();
 
-  // body
+  // body - the curve now bows along the whole traveling wave, not just at the tail
   g.lineStyle({ width: Math.max(1.6, s*0.085), color: colors.body, ...ROUND });
   g.moveTo(s*1.0*stretch, 0);
-  g.quadraticCurveTo(s*0.5, -s*0.62 + bodyWave*0.4, -s*0.85, -s*0.30 + bank*s*0.15 + bodyWave);
-  g.quadraticCurveTo(-s*1.05, bodyWave, -s*0.85, s*0.30 - bank*s*0.15 + bodyWave);
-  g.quadraticCurveTo(s*0.5, s*0.62 + bodyWave*0.4, s*1.0*stretch, 0);
+  g.quadraticCurveTo(
+    s*0.5, -s*0.60 + bodyWave*0.4 + wagMid*s*0.10,
+    -s*0.85, -s*0.30 + bank*s*0.15 + bodyWave + wagJoint*s*0.12
+  );
+  g.quadraticCurveTo(-s*1.05, bodyWave + wagJoint*s*0.12, -s*0.85, s*0.30 - bank*s*0.15 + bodyWave + wagJoint*s*0.12);
+  g.quadraticCurveTo(s*0.5, s*0.62 + bodyWave*0.4 + wagMid*s*0.10, s*1.0*stretch, 0);
 
-  // top fin (removed triangle part)
-  const flutter = Math.sin(tailPhase*1.3) * 0.15;
-  g.lineStyle({ width: Math.max(1.2, s*0.06), color: colors.fin, ...ROUND });
-  g.moveTo(-s*0.1, -s*0.32 + bodyWave*0.5);
-  g.lineTo(s*0.05 + flutter*s*0.12, -s*0.75 + wag*s*0.2);
+  // dorsal ridge - a small, low, rounded fin instead of a sharp triangular spike
+  const ridgeFlutter = Math.sin(tailPhase*1.3) * 0.12;
+  g.lineStyle({ width: Math.max(1.4, s*0.07), color: colors.fin, ...ROUND });
+  g.moveTo(-s*0.22, -s*0.34 + bodyWave*0.5 + wagMid*s*0.08);
+  g.quadraticCurveTo(
+    -s*0.05, -s*0.50 + ridgeFlutter*s*0.10 + wagMid*s*0.08,
+    s*0.16, -s*0.36 + bodyWave*0.3 + wagMid*s*0.06
+  );
 
-  // pectoral fin
+  // pectoral fin - gentle rowing motion synced to the swim cycle
   const row = Math.sin(tailPhase + 1.4) * 0.4 + 0.2;
   g.moveTo(s*0.18, s*0.12);
   g.quadraticCurveTo(s*0.05 + row*s*0.1, s*0.55, -s*0.15, s*0.42 + row*s*0.15);
@@ -314,10 +342,18 @@ function updatePlayer(dt){
   const wasUnderwater = player.y >= SURFACE_Y;
 
   let ax = 0, ay = 0;
-  if(keys.left) ax -= player.accel;
-  if(keys.right) ax += player.accel;
-  if(keys.up) ay -= player.accel;
-  if(keys.down) ay += player.accel;
+  if(gameStarted){
+    if(keys.left) ax -= player.accel;
+    if(keys.right) ax += player.accel;
+    if(keys.up) ay -= player.accel;
+    if(keys.down) ay += player.accel;
+  } else {
+    // Title screen: no input yet, just a slow ambient drift so the camera
+    // glides past the reef instead of sitting frozen behind the blur.
+    const t = performance.now()*0.00006;
+    ax = Math.sin(t)*player.accel*0.35;
+    ay = Math.cos(t*0.7)*player.accel*0.22;
+  }
 
   if(ax !== 0 && ay !== 0){ ax *= 0.78; ay *= 0.78; }
 
@@ -381,8 +417,8 @@ function updatePlayer(dt){
   const angleDiff = ((player.angle - player.displayAngle + Math.PI) % (Math.PI*2)) - Math.PI;
   player.bank = clamp(angleDiff * 1.8, -1, 1);
 
-  const moveFactor = 0.6 + Math.min(speed/player.maxSpeed, 1)*1.6;
-  player.tailPhase += 0.16*dt*moveFactor*6;
+  const moveFactor = 0.5 + Math.min(speed/player.maxSpeed, 1)*1.85;
+  player.tailPhase += 0.155*dt*moveFactor*6;
   player.bob = inAir ? 0 : Math.sin(performance.now()*0.0025)*1.6;
   player.inAir = inAir;
 
@@ -724,7 +760,8 @@ function spawnShark(x,y){
 
 function updateShark(sh, dt){
   const dx = sh.targetX - sh.x;
-  sh.vx = lerp(sh.vx, Math.sign(dx)*2.1, 0.01*dt);
+  const speedMult = options.difficulty === 'hard' ? 1.35 : (options.difficulty === 'peaceful' ? 0.8 : 1);
+  sh.vx = lerp(sh.vx, Math.sign(dx)*2.1*speedMult, 0.01*dt);
   sh.vy = lerp(sh.vy, Math.sin(performance.now()*0.0006+sh.x*0.001)*0.4, 0.02*dt);
   sh.x += sh.vx*dt; sh.y += sh.vy*dt;
   sh.y = clamp(sh.y, WORLD_TOP_MARGIN+100, SEAFLOOR_Y-150);
@@ -737,12 +774,6 @@ function updateShark(sh, dt){
 
   sh.g.x = sh.x; sh.g.y = sh.y; sh.g.rotation = sh.displayAngle;
   drawFishShape(sh.g, sh.size, SHARK_COLORS, sh.tailPhase, 1, sh.bank);
-
-  const s = sh.size;
-  sh.g.lineStyle(1.6, SHARK_COLORS.fin);
-  sh.g.moveTo(0,-s*0.25);
-  sh.g.lineTo(s*0.15, -s*0.9);
-  sh.g.lineTo(s*0.4,-s*0.2);
 }
 
 /* ============================= OCTOPUS ============================= */
@@ -1150,7 +1181,8 @@ function totalCreatureCount(){
 function trySpawn(dt){
   spawnTimer -= dt;
   if(spawnTimer > 0) return;
-  spawnTimer = rand(40,110);
+  const spawnRateMult = options.difficulty === 'hard' ? 1.4 : (options.difficulty === 'peaceful' ? 0.75 : 1);
+  spawnTimer = rand(40,110) / spawnRateMult;
   if(totalCreatureCount() >= MAX_NPCS) return;
 
   const angle = rand(0, Math.PI*2);
@@ -1181,8 +1213,13 @@ function trySpawn(dt){
     npcs.push(spawnSeaHub(x, y));
   } else if(r < 0.98){
     npcs.push(spawnPufferfish(x, y));
-  } else {
+  } else if(options.difficulty !== 'peaceful'){
     npcs.push(spawnShark(x,y));
+  }
+
+  // Hard mode: small extra chance to slip in a bonus shark on the same tick
+  if(options.difficulty === 'hard' && Math.random() < 0.12 && totalCreatureCount() < MAX_NPCS){
+    npcs.push(spawnShark(player.x + Math.cos(angle+1)*d, y));
   }
 }
 
@@ -1378,12 +1415,371 @@ function updateWaterBackground(){
   const cycleTime = getCycleTime(performance.now());
   let brightness = cycleTime < 0.5 ? (1 - cycleTime*2) : (cycleTime*2 - 1);
   brightness = 0.5 + brightness*0.5; // 0.5 to 1.0
+  brightness *= options.brightness; // user-controlled brightness from Options menu
   
   const adjustedC1 = [Math.round(c1[0]*brightness), Math.round(c1[1]*brightness), Math.round(c1[2]*brightness)];
   const adjustedC2 = [Math.round(c2[0]*brightness), Math.round(c2[1]*brightness), Math.round(c2[2]*brightness)];
   
   waterBg.style.background = `linear-gradient(to bottom, ${rgbToCss(adjustedC1)} 0%, ${rgbToCss(adjustedC2)} 100%)`;
 }
+
+/* ============================= OPTIONS ============================= */
+
+const options = {
+  volume: 1.0,          // 0..1, master volume for ambient/SFX audio
+  brightness: 1.0,       // 0.5..1.5, multiplies the water-color brightness
+  difficulty: 'normal',  // 'peaceful' | 'normal' | 'hard' - affects shark frequency/speed
+  showHints: true        // whether the bottom instructions hint is allowed to show
+};
+
+/* ============================= AUDIO ============================= */
+// Small self-contained Web Audio setup: a soft underwater drone plus
+// occasional bubble blips, all routed through one master gain node so
+// the Options volume slider actually does something audible.
+
+let audioCtx = null;
+let masterGain = null;
+let droneNodes = null;
+
+function ensureAudio(){
+  if(audioCtx) return;
+  try{
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = options.volume * 0.5;
+    masterGain.connect(audioCtx.destination);
+    startDrone();
+  }catch(err){
+    audioCtx = null; // audio is optional - silently no-op if unsupported/blocked
+  }
+}
+
+function startDrone(){
+  if(!audioCtx || droneNodes) return;
+  const osc1 = audioCtx.createOscillator();
+  const osc2 = audioCtx.createOscillator();
+  const droneGain = audioCtx.createGain();
+  osc1.type = 'sine'; osc1.frequency.value = 55;
+  osc2.type = 'sine'; osc2.frequency.value = 82.5;
+  droneGain.gain.value = 0.18;
+  osc1.connect(droneGain);
+  osc2.connect(droneGain);
+  droneGain.connect(masterGain);
+  osc1.start(); osc2.start();
+  droneNodes = { osc1, osc2, droneGain };
+}
+
+function playBlip(){
+  if(!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(rand(500,900), t);
+  osc.frequency.exponentialRampToValueAtTime(rand(900,1400), t+0.12);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.22, t+0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+0.18);
+  osc.connect(g); g.connect(masterGain);
+  osc.start(t); osc.stop(t+0.2);
+}
+
+function setVolume(v){
+  options.volume = clamp(v, 0, 1);
+  if(masterGain) masterGain.gain.value = options.volume * 0.5;
+}
+
+/* ============================= TITLE SCREEN / OPTIONS WIRING ============================= */
+
+const titleScreenEl = document.getElementById('title-screen');
+const optionsScreenEl = document.getElementById('options-screen');
+const playButtonEl = document.getElementById('play-button');
+const optionsButtonEl = document.getElementById('options-button');
+const backButtonEl = document.getElementById('back-button');
+const volumeSliderEl = document.getElementById('volume-slider');
+const brightnessSliderEl = document.getElementById('brightness-slider');
+const difficultySelectEl = document.getElementById('difficulty-select');
+const showHintsCheckboxEl = document.getElementById('show-hints-checkbox');
+
+const pregameHideTargets = ['hud','depthbar','instructions','touch-controls'];
+function setPregameVisible(visible){
+  for(const id of pregameHideTargets){
+    const el = document.getElementById(id);
+    if(!el) continue;
+    el.classList.toggle('pregame-hidden', !visible);
+  }
+}
+setPregameVisible(false); // hidden until Play is pressed
+
+let optionsOpenedFromTitle = true; // tracks whether Back should return to title or resume gameplay
+
+function openOptions(fromTitle){
+  optionsOpenedFromTitle = fromTitle;
+  optionsScreenEl.classList.remove('screen-hidden');
+  optionsScreenEl.classList.add('screen-active');
+  if(fromTitle){
+    titleScreenEl.classList.add('screen-hidden');
+    titleScreenEl.classList.remove('screen-active');
+  }
+}
+
+function closeOptions(){
+  optionsScreenEl.classList.add('screen-hidden');
+  optionsScreenEl.classList.remove('screen-active');
+  if(optionsOpenedFromTitle){
+    titleScreenEl.classList.remove('screen-hidden');
+    titleScreenEl.classList.add('screen-active');
+  }
+}
+
+function startGame(){
+  if(gameStarted) return;
+  gameStarted = true;
+  ensureAudio();
+  titleScreenEl.classList.add('screen-hidden');
+  titleScreenEl.classList.remove('screen-active');
+  playerG.visible = true;
+  setPregameVisible(true);
+  if(options.showHints){
+    setTimeout(hideInstructions, 6000);
+  } else {
+    hideInstructions();
+  }
+}
+
+playButtonEl.addEventListener('click', startGame);
+optionsButtonEl.addEventListener('click', ()=> openOptions(true));
+backButtonEl.addEventListener('click', closeOptions);
+
+volumeSliderEl.addEventListener('input', (e)=>{
+  setVolume(e.target.value/100);
+});
+brightnessSliderEl.addEventListener('input', (e)=>{
+  options.brightness = clamp(e.target.value/100, 0.5, 1.5);
+});
+difficultySelectEl.addEventListener('change', (e)=>{
+  options.difficulty = e.target.value;
+  if(options.difficulty === 'peaceful'){
+    // immediately clear out any sharks already in the water
+    for(let i=npcs.length-1;i>=0;i--){
+      if(npcs[i].type === 'shark'){ destroyNpc(npcs[i]); npcs.splice(i,1); }
+    }
+  }
+});
+showHintsCheckboxEl.addEventListener('change', (e)=>{
+  options.showHints = e.target.checked;
+  if(!options.showHints) hideInstructions();
+});
+
+// Player graphic stays invisible until Play is pressed, but the rest of the
+// ocean (fish, bubbles, water color, day/night) keeps animating behind the
+// blurred title screen so it reads as a living preview, not a static image.
+playerG.visible = false;
+
+/* ============================= COMMAND PROMPT (Minecraft-style) ============================= */
+
+const commandPromptEl = document.getElementById('command-prompt');
+const commandOutputEl = document.getElementById('command-output');
+const commandInputEl = document.getElementById('command-input');
+
+function printLine(text, cls){
+  const line = document.createElement('div');
+  line.className = 'line' + (cls ? ' '+cls : '');
+  line.textContent = text;
+  commandOutputEl.appendChild(line);
+  commandOutputEl.scrollTop = commandOutputEl.scrollHeight;
+}
+
+function openCommandPrompt(){
+  commandOpen = true;
+  commandPromptEl.classList.remove('command-hidden');
+  commandInputEl.value = '';
+  commandInputEl.focus();
+  // release any swim keys that were held down at the moment '/' was pressed
+  keys.up = keys.down = keys.left = keys.right = keys.space = false;
+}
+
+function closeCommandPrompt(){
+  commandOpen = false;
+  commandPromptEl.classList.add('command-hidden');
+  commandInputEl.blur();
+}
+
+commandInputEl.addEventListener('keydown', (e)=>{
+  e.stopPropagation();
+  if(e.key === 'Enter'){
+    const raw = commandInputEl.value.trim();
+    commandInputEl.value = '';
+    if(raw.length === 0) return;
+    printLine('> ' + raw, 'echo');
+    runCommand(raw);
+  } else if(e.key === 'Escape'){
+    closeCommandPrompt();
+  }
+});
+
+const COMMAND_LIST = [
+  'help','clear','depth','teleport','tp','speed','spawn','clearcreatures',
+  'time','weather','flip','coords','fact','8ball','roll','coinflip','rename'
+];
+
+const FUN_FACTS = [
+  'The blue whale\'s heart alone can weigh as much as a small car.',
+  'Octopuses have three hearts and blue blood.',
+  'The deepest part of the ocean is the Mariana Trench, nearly 11,000m down.',
+  'A group of jellyfish is called a smack.',
+  'Sharks have been around longer than trees.',
+  'Some fish can change sex during their lifetime.',
+  'The ocean produces over half of the world\'s oxygen.',
+  'Seahorses are famously the species where males carry the young.',
+  'Pufferfish can inflate to several times their normal size in seconds.',
+  'Starfish don\'t have brains or blood.'
+];
+
+const MAGIC_8BALL = [
+  'It is certain.','Without a doubt.','Yes, definitely.','You may rely on it.',
+  'Ask again later.','Cannot predict now.','Concentrate and ask again.',
+  'Don\'t count on it.','My reply is no.','Outlook not so good.','Very doubtful.'
+];
+
+const SPAWNABLE = {
+  jellyfish: (x,y)=> spawnJellyfish(x,y),
+  crab: (x)=> spawnCrab(x),
+  turtle: (x,y)=> spawnTurtle(x,y),
+  octopus: (x,y)=> spawnOctopus(x,y),
+  seahorse: (x,y)=> spawnSeahorse(x,y),
+  stingray: (x,y)=> spawnStingray(x,y),
+  eel: (x,y)=> spawnEel(x,y),
+  starfish: (x)=> spawnStarfish(x),
+  seahub: (x,y)=> spawnSeaHub(x,y),
+  pufferfish: (x,y)=> spawnPufferfish(x,y),
+  shark: (x,y)=> spawnShark(x,y),
+  school: (x,y)=> { spawnSchool(x,y); return null; }
+};
+
+function runCommand(raw){
+  const parts = raw.split(/\s+/);
+  const cmd = parts[0].toLowerCase().replace(/^\//,'');
+  const args = parts.slice(1);
+  playBlip();
+
+  switch(cmd){
+    case 'help': {
+      printLine('Available commands:', 'info');
+      printLine(COMMAND_LIST.join(', '), 'info');
+      break;
+    }
+    case 'clear': {
+      commandOutputEl.innerHTML = '';
+      break;
+    }
+    case 'depth': {
+      const m = Math.max(0, Math.round((player.y - SURFACE_Y)/8));
+      printLine(`Current depth: ${m}m`, 'ok');
+      break;
+    }
+    case 'coords': {
+      printLine(`x=${Math.round(player.x)} y=${Math.round(player.y)}`, 'ok');
+      break;
+    }
+    case 'teleport': case 'tp': {
+      if(args[0]==='surface'){
+        player.y = SURFACE_Y + 10; player.vy = 0;
+        printLine('Teleported to the surface.', 'ok');
+      } else if(args[0]==='seafloor' || args[0]==='floor'){
+        player.y = floorY(player.x) - 60; player.vy = 0;
+        printLine('Teleported to the seafloor.', 'ok');
+      } else if(args.length>=2 && !isNaN(+args[0]) && !isNaN(+args[1])){
+        player.x = +args[0]; player.y = +args[1]; player.vx=0; player.vy=0;
+        printLine(`Teleported to (${args[0]}, ${args[1]}).`, 'ok');
+      } else {
+        printLine('Usage: /tp surface | /tp seafloor | /tp <x> <y>', 'err');
+      }
+      break;
+    }
+    case 'speed': {
+      const v = parseFloat(args[0]);
+      if(isNaN(v) || v<=0){ printLine('Usage: /speed <number, e.g. 5.4>', 'err'); break; }
+      player.maxSpeed = clamp(v, 1, 40);
+      printLine(`Max speed set to ${player.maxSpeed}.`, 'ok');
+      break;
+    }
+    case 'spawn': {
+      const what = (args[0]||'').toLowerCase();
+      const fn = SPAWNABLE[what];
+      if(!fn){
+        printLine('Spawnable: ' + Object.keys(SPAWNABLE).join(', '), 'err');
+        break;
+      }
+      const sx = player.x + rand(-160,160);
+      const sy = clamp(player.y + rand(-100,100), WORLD_TOP_MARGIN+40, SEAFLOOR_Y-40);
+      const n = fn(sx, sy);
+      if(n) npcs.push(n);
+      printLine(`Spawned a ${what} nearby.`, 'fun');
+      break;
+    }
+    case 'clearcreatures': {
+      for(const n of npcs) destroyNpc(n);
+      npcs = [];
+      for(const s of schools) destroySchool(s);
+      schools.length = 0;
+      printLine('Cleared all creatures.', 'ok');
+      break;
+    }
+    case 'time': {
+      const cycleTime = getCycleTime(performance.now());
+      printLine(cycleTime < 0.5 ? 'It is currently day.' : 'It is currently night.', 'info');
+      break;
+    }
+    case 'weather': {
+      const opts = ['Calm currents.','A gentle drift today.','Sun rays piercing the surface.','Murky and still.','Bubbles rising steadily.'];
+      printLine(opts[randi(0,opts.length-1)], 'fun');
+      break;
+    }
+    case 'flip': {
+      player.flipping = true;
+      player.flipProgress = 0;
+      player.flipDir = Math.random()<0.5 ? 1 : -1;
+      printLine('Flip!', 'fun');
+      break;
+    }
+    case 'fact': {
+      printLine(FUN_FACTS[randi(0,FUN_FACTS.length-1)], 'fun');
+      break;
+    }
+    case '8ball': {
+      if(args.length===0){ printLine('Ask the 8-ball a question, e.g. /8ball will I find a shark?', 'err'); break; }
+      printLine(MAGIC_8BALL[randi(0,MAGIC_8BALL.length-1)], 'fun');
+      break;
+    }
+    case 'roll': {
+      const sides = parseInt(args[0]) || 6;
+      printLine(`You rolled a ${randi(1,Math.max(2,sides))} (d${sides}).`, 'fun');
+      break;
+    }
+    case 'coinflip': {
+      printLine(Math.random()<0.5 ? 'Heads!' : 'Tails!', 'fun');
+      break;
+    }
+    case 'rename': {
+      if(args.length===0){ printLine('Usage: /rename <new name>', 'err'); break; }
+      const name = args.join(' ').slice(0,24);
+      document.getElementById('title-text').textContent = name;
+      document.getElementById('title-text').setAttribute('data-text', name);
+      printLine(`Renamed the game to "${name}". (cosmetic, title screen only)`, 'fun');
+      break;
+    }
+    default: {
+      printLine(`Unknown command: ${cmd}. Type /help for a list.`, 'err');
+    }
+  }
+}
+
+window.addEventListener('keydown', (e)=>{
+  if(commandOpen && e.key === 'Escape'){
+    closeCommandPrompt();
+  }
+});
 
 /* ============================= HUD ============================= */
 
