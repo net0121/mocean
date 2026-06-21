@@ -54,6 +54,24 @@ html,body{
   transition:top 0.08s linear;
 }
 
+#creature-tooltip{
+  position:fixed;
+  top:0; left:0;
+  display:none;
+  background:rgba(0,0,0,0.88);
+  color:#fff;
+  font-family:'Roboto Mono', 'Courier New', monospace;
+  font-size:12px;
+  letter-spacing:0.3px;
+  padding:5px 9px;
+  border-radius:4px;
+  pointer-events:none;
+  user-select:none;
+  white-space:nowrap;
+  transform:translate(-50%, 0);
+  z-index:30;
+}
+
 #instructions{
   position:fixed; left:50%; bottom:30px; transform:translateX(-50%);
   color:var(--foam); background:rgba(2,16,25,0.55);
