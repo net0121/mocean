@@ -15,6 +15,45 @@
   <div id="water-bg"></div>
   <div id="pixi-root"></div>
 
+  <!-- Title Screen -->
+  <div id="title-screen" class="screen-active">
+    <div class="title-content">
+      <h1 id="title-text" class="watery-title">mocean</h1>
+      <button id="play-button" class="play-btn">Play</button>
+      <button id="options-button" class="options-btn">Options</button>
+    </div>
+  </div>
+
+  <!-- Options Menu -->
+  <div id="options-screen" class="screen-hidden">
+    <div class="options-content">
+      <h2>Options</h2>
+      <div class="option-group">
+        <label for="volume-slider">Master Volume</label>
+        <input type="range" id="volume-slider" min="0" max="100" value="100">
+      </div>
+      <div class="option-group">
+        <label for="brightness-slider">Brightness</label>
+        <input type="range" id="brightness-slider" min="50" max="150" value="100">
+      </div>
+      <div class="option-group">
+        <label for="difficulty-select">Difficulty</label>
+        <select id="difficulty-select">
+          <option value="peaceful">Peaceful</option>
+          <option value="normal">Normal</option>
+          <option value="hard">Hard</option>
+        </select>
+      </div>
+      <div class="option-group">
+        <label>
+          <input type="checkbox" id="show-hints-checkbox" checked>
+          Show Controls Hint
+        </label>
+      </div>
+      <button id="back-button" class="back-btn">Back</button>
+    </div>
+  </div>
+
   <div id="hud">
     <div class="label">Depth</div>
     <div class="value"><span id="depthVal">0</span> m</div>
@@ -24,13 +63,21 @@
 
   <div id="creature-tooltip"></div>
 
-  <div id="instructions">Arrow keys to swim &nbsp;•&nbsp; hold a direction to accelerate &nbsp;•&nbsp; breach to flip or press Space &nbsp;•&nbsp; Tab for debug</div>
+  <div id="instructions">Arrow keys to swim &nbsp;•&nbsp; hold a direction to accelerate &nbsp;•&nbsp; breach to flip or press Space &nbsp;•&nbsp; Tab for debug &nbsp;•&nbsp; / for commands</div>
 
   <div id="touch-controls">
     <button id="btn-up">&#9650;</button>
     <button id="btn-left">&#9664;</button>
     <button id="btn-down">&#9660;</button>
     <button id="btn-right">&#9654;</button>
+  </div>
+
+  <!-- Command Prompt -->
+  <div id="command-prompt" class="command-hidden">
+    <div class="command-container">
+      <div class="command-output" id="command-output"></div>
+      <input type="text" id="command-input" placeholder="Enter command..." autocomplete="off" spellcheck="false">
+    </div>
   </div>
 
   <!-- PixiJS v7 (rendering engine: scene graph, camera transforms, Graphics/line drawing) -->
