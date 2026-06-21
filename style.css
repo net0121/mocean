@@ -285,68 +285,37 @@ html,body{
 #hud .label{ opacity:0.65; font-size:11px; text-transform:uppercase; letter-spacing:1.5px; }
 #hud .value{ font-size:20px; font-weight:600; }
 
-/* Watery clock for day/night cycle */
+/* Watery 24-hour digital clock for day/night cycle */
 #daynight-clock {
-  width:48px;
-  height:48px;
-  margin-top:12px;
-  border-radius:50%;
-  border:2px solid rgba(223,246,255,0.35);
+  margin-top:14px;
+  font-family:'Roboto Mono', monospace;
+  font-size:22px;
+  font-weight:600;
+  color:var(--foam);
+  text-shadow:0 0 12px rgba(127,232,212,0.4), 0 2px 4px rgba(0,0,0,0.5);
+  letter-spacing:2px;
+  background:rgba(2,16,25,0.55);
+  border:1px solid rgba(223,246,255,0.25);
+  border-radius:8px;
+  padding:6px 12px;
+  display:inline-block;
   position:relative;
-  background:rgba(2,16,25,0.4);
   overflow:hidden;
 }
 
-.clock-face {
+#daynight-clock::before {
+  content:'';
   position:absolute;
   inset:0;
-  border-radius:50%;
+  background:linear-gradient(120deg, rgba(127,232,212,0.08), rgba(114,208,255,0.08), rgba(127,232,212,0.08));
+  background-size:200% 100%;
+  animation:clockShimmer 3s ease-in-out infinite;
+  pointer-events:none;
 }
 
-.clock-sun {
-  position:absolute;
-  width:10px;
-  height:10px;
-  border-radius:50%;
-  background:#ffd166;
-  box-shadow:0 0 8px rgba(255,209,102,0.6);
-  top:4px;
-  left:50%;
-  transform:translateX(-50%);
-}
-
-.clock-moon {
-  position:absolute;
-  width:8px;
-  height:8px;
-  border-radius:50%;
-  background:#c8d6e5;
-  box-shadow:0 0 6px rgba(200,214,229,0.5);
-  bottom:4px;
-  left:50%;
-  transform:translateX(-50%);
-}
-
-.clock-hand {
-  position:absolute;
-  width:2px;
-  height:18px;
-  background:rgba(223,246,255,0.7);
-  bottom:50%;
-  left:50%;
-  transform-origin:bottom center;
-  transform:translateX(-50%) rotate(0deg);
-  border-radius:1px;
-}
-
-.clock-water-fill {
-  position:absolute;
-  bottom:0;
-  left:0;
-  right:0;
-  border-radius:0 0 50% 50%;
-  background:linear-gradient(to top, rgba(34,116,170,0.4), rgba(34,116,170,0.1));
-  transition:height 0.3s ease;
+@keyframes clockShimmer {
+  0%, 100% { background-position:0% 50%; }
+  50% { background-position:100% 50%; }
 }
 
 #creature-tooltip{
