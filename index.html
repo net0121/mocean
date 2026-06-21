@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Endless Ocean</title>
+<style>
+  :root{
+    --foam:#dff6ff;
+    --ink:#06121c;
+  }
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    overflow:hidden; background:#021019;
+    font-family:'Trebuchet MS', 'Segoe UI', sans-serif;
+  }
+  canvas{ display:block; touch-action:none; }
+
+  #hud{
+    position:fixed; top:14px; left:14px;
+    color:var(--foam);
+    font-size:14px; letter-spacing:0.5px;
+    text-shadow:0 1px 3px rgba(0,0,0,0.6);
+    pointer-events:none;
+    user-select:none;
+  }
+  #hud .label{ opacity:0.65; font-size:11px; text-transform:uppercase; letter-spacing:1.5px; }
+  #hud .value{ font-size:20px; font-weight:600; }
+
+  #depthbar{
+    position:fixed; right:14px; top:50%; transform:translateY(-50%);
+    width:10px; height:220px;
+    border:1px solid rgba(223,246,255,0.4);
+    border-radius:6px;
+    pointer-events:none;
+  }
+  #depthdot{
+    position:absolute; left:-3px; width:16px; height:16px;
+    border-radius:50%; background:#ff9d5c;
+    box-shadow:0 0 8px rgba(255,157,92,0.8);
+    transition:top 0.08s linear;
+  }
+
+  #instructions{
+    position:fixed; left:50%; bottom:30px; transform:translateX(-50%);
+    color:var(--foam); background:rgba(2,16,25,0.55);
+    border:1px solid rgba(223,246,255,0.25);
+    padding:10px 18px; border-radius:20px;
+    font-size:13px; letter-spacing:0.3px;
+    pointer-events:none; user-select:none;
+    transition:opacity 1.2s ease;
+  }
+  #instructions.hide{ opacity:0; }
+
+  #touch-controls{
+    position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+    display:none; grid-template-columns:48px 48px 48px;
+    grid-template-rows:48px 48px;
+    gap:6px;
+    z-index:10;
+  }
+  #touch-controls button{
+    width:48px; height:48px; border-radius:12px;
+    border:1px solid rgba(223,246,255,0.4);
+    background:rgba(6,18,28,0.55);
+    color:var(--foam); font-size:18px;
+    -webkit-tap-highlight-color:transparent;
+    user-select:none;
+  }
+  #touch-controls button:active{ background:rgba(255,157,92,0.5); }
+  #btn-up{ grid-column:2; grid-row:1; }
+  #btn-left{ grid-column:1; grid-row:2; }
+  #btn-down{ grid-column:2; grid-row:2; }
+  #btn-right{ grid-column:3; grid-row:2; }
+
+  @media (pointer:coarse){
+    #touch-controls{ display:grid; }
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <div class="label">Depth</div>
+  <div class="value"><span id="depthVal">0</span> m</div>
+</div>
+
+<div id="depthbar"><div id="depthdot"></div></div>
+
+<div id="instructions">Arrow keys to swim &nbsp;•&nbsp; hold a direction to accelerate</div>
+
+<div id="touch-controls">
+  <button id="btn-up">&#9650;</button>
+  <button id="btn-left">&#9664;</button>
+  <button id="btn-down">&#9660;</button>
+  <button id="btn-right">&#9654;</button>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+/* ============================= SETUP ============================= */
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0, DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+function resize(){
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W * DPR;
+  canvas.height = H * DPR;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+function rand(a,b){ return a + Math.random()*(b-a); }
+function randi(a,b){ return Math.floor(rand(a,b+1)); }
+function clamp(v,a,b){ return Math.max(a, Math.min(b,v)); }
+function dist2(ax,ay,bx,by){ const dx=ax-bx, dy=ay-by; return dx*dx+dy*dy; }
+function lerp(a,b,t){ return a + (b-a)*t; }
+function lerpAngle(a,b,t){
+  let diff = ((b - a + Math.PI) % (Math.PI*2)) - Math.PI;
+  if (diff < -Math.PI) diff += Math.PI*2;
+  return a + diff*t;
+}
+function hash(n){
+  const x = Math.sin(n*127.1)*43758.5453123;
+  return x - Math.floor(x);
+}
+function lerpColor(c1,c2,t){
+  return [
+    Math.round(lerp(c1[0],c2[0],t)),
+    Math.round(lerp(c1[1],c2[1],t)),
+    Math.round(lerp(c1[2],c2[2],t))
+  ];
+}
+
+/* ============================= WORLD ============================= */
+
+const SURFACE_Y = 0;
+const SEAFLOOR_Y = 5200;
+const WORLD_TOP_MARGIN = 40;
+const WORLD_BOTTOM_MARGIN = 60;
+
+function floorY(x){
+  return SEAFLOOR_Y
+    + Math.sin(x*0.008)*40
+    + Math.sin(x*0.021+3)*22
+    + Math.sin(x*0.05+7)*9;
+}
+
+const DEPTH_STOPS = [
+  {stop:0.00, color:[133,221,235]},
+  {stop:0.12, color:[72,170,205]},
+  {stop:0.30, color:[34,116,170]},
+  {stop:0.55, color:[18,72,122]},
+  {stop:0.78, color:[10,38,72]},
+  {stop:1.00, color:[3,12,26]}
+];
+function colorAtDepthFraction(f){
+  f = clamp(f,0,1);
+  for(let i=0;i<DEPTH_STOPS.length-1;i++){
+    const a = DEPTH_STOPS[i], b = DEPTH_STOPS[i+1];
+    if(f>=a.stop && f<=b.stop){
+      const t = (f-a.stop)/(b.stop-a.stop || 1);
+      return lerpColor(a.color,b.color,t);
+    }
+  }
+  return DEPTH_STOPS[DEPTH_STOPS.length-1].color;
+}
+
+/* ============================= INPUT ============================= */
+
+const keys = { up:false, down:false, left:false, right:false };
+
+window.addEventListener('keydown', (e)=>{
+  switch(e.key){
+    case 'ArrowUp': keys.up=true; e.preventDefault(); break;
+    case 'ArrowDown': keys.down=true; e.preventDefault(); break;
+    case 'ArrowLeft': keys.left=true; e.preventDefault(); break;
+    case 'ArrowRight': keys.right=true; e.preventDefault(); break;
+  }
+  hideInstructions();
+}, {passive:false});
+
+window.addEventListener('keyup', (e)=>{
+  switch(e.key){
+    case 'ArrowUp': keys.up=false; break;
+    case 'ArrowDown': keys.down=false; break;
+    case 'ArrowLeft': keys.left=false; break;
+    case 'ArrowRight': keys.right=false; break;
+  }
+});
+
+function bindTouchBtn(id, key){
+  const el = document.getElementById(id);
+  const set = (v)=> (e)=>{ keys[key]=v; hideInstructions(); e.preventDefault(); };
+  el.addEventListener('touchstart', set(true), {passive:false});
+  el.addEventListener('touchend', set(false), {passive:false});
+  el.addEventListener('touchcancel', set(false), {passive:false});
+  el.addEventListener('mousedown', set(true));
+  el.addEventListener('mouseup', set(false));
+  el.addEventListener('mouseleave', set(false));
+}
+bindTouchBtn('btn-up','up');
+bindTouchBtn('btn-down','down');
+bindTouchBtn('btn-left','left');
+bindTouchBtn('btn-right','right');
+
+let instructionsHidden = false;
+function hideInstructions(){
+  if(instructionsHidden) return;
+  instructionsHidden = true;
+  document.getElementById('instructions').classList.add('hide');
+}
+setTimeout(hideInstructions, 6000);
+
+/* ============================= PLAYER FISH ============================= */
+
+const player = {
+  x: 300, y: 900,
+  vx: 0, vy: 0,
+  angle: 0, displayAngle: 0,
+  tailPhase: 0,
+  size: 20,
+  maxSpeed: 5.4,
+  accel: 0.34,
+  drag: 0.94,
+  bob: 0
+};
+
+function updatePlayer(dt){
+  let ax = 0, ay = 0;
+  if(keys.left) ax -= player.accel;
+  if(keys.right) ax += player.accel;
+  if(keys.up) ay -= player.accel;
+  if(keys.down) ay += player.accel;
+
+  // diagonal input shouldn't be faster than cardinal
+  if(ax !== 0 && ay !== 0){ ax *= 0.78; ay *= 0.78; }
+
+  player.vx += ax * dt;
+  player.vy += ay * dt;
+
+  player.vx *= Math.pow(player.drag, dt);
+  player.vy *= Math.pow(player.drag, dt);
+
+  const speed = Math.hypot(player.vx, player.vy);
+  if(speed > player.maxSpeed){
+    const k = player.maxSpeed / speed;
+    player.vx *= k; player.vy *= k;
+  }
+
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+
+  // world bounds: can't leave the water
+  const top = SURFACE_Y + WORLD_TOP_MARGIN;
+  const bottom = SEAFLOOR_Y - WORLD_BOTTOM_MARGIN;
+  if(player.y < top){ player.y = top; player.vy *= -0.3; }
+  if(player.y > bottom){ player.y = bottom; player.vy *= -0.3; }
+
+  if(speed > 0.08){
+    player.angle = Math.atan2(player.vy, player.vx);
+  }
+  player.displayAngle = lerpAngle(player.displayAngle, player.angle, 0.12*dt);
+
+  const moveFactor = 0.6 + Math.min(speed/player.maxSpeed, 1)*1.6;
+  player.tailPhase += 0.16*dt*moveFactor*6;
+
+  player.bob = Math.sin(performance.now()*0.0025)*1.6;
+
+  return speed;
+}
+
+function drawFish(x,y,angle,size,colors,tailPhase,speed,bankAmt){
+  // colors = {body, fin, eye}
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.rotate(angle);
+  const s = size;
+  const wag = Math.sin(tailPhase) * (0.35 + Math.min(speed,1)*0.55);
+  const bank = bankAmt || 0;
+
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+
+  // tail fin
+  ctx.beginPath();
+  ctx.moveTo(-s*0.85, 0);
+  ctx.quadraticCurveTo(-s*1.5, wag*s*0.7, -s*1.9, wag*s*1.1 - 0.4*s);
+  ctx.moveTo(-s*0.85, 0);
+  ctx.quadraticCurveTo(-s*1.5, wag*s*0.7 , -s*1.9, wag*s*1.1 + 0.4*s);
+  ctx.strokeStyle = colors.fin;
+  ctx.lineWidth = Math.max(1.4, s*0.07);
+  ctx.stroke();
+
+  // body
+  ctx.beginPath();
+  ctx.moveTo(s*1.0, 0);
+  ctx.quadraticCurveTo(s*0.5, -s*0.62, -s*0.85, -s*0.30 + bank*s*0.15);
+  ctx.quadraticCurveTo(-s*1.05, 0, -s*0.85, s*0.30 - bank*s*0.15);
+  ctx.quadraticCurveTo(s*0.5, s*0.62, s*1.0, 0);
+  ctx.strokeStyle = colors.body;
+  ctx.lineWidth = Math.max(1.6, s*0.085);
+  ctx.stroke();
+
+  // top fin
+  ctx.beginPath();
+  ctx.moveTo(-s*0.1, -s*0.32);
+  ctx.lineTo(s*0.05, -s*0.75 + wag*s*0.2);
+  ctx.lineTo(s*0.32, -s*0.30);
+  ctx.strokeStyle = colors.fin;
+  ctx.lineWidth = Math.max(1.2, s*0.06);
+  ctx.stroke();
+
+  // side fin
+  ctx.beginPath();
+  ctx.moveTo(s*0.18, s*0.12);
+  ctx.quadraticCurveTo(s*0.05, s*0.55, -s*0.15, s*0.42 + wag*s*0.15);
+  ctx.strokeStyle = colors.fin;
+  ctx.lineWidth = Math.max(1.2, s*0.06);
+  ctx.stroke();
+
+  // eye
+  ctx.beginPath();
+  ctx.arc(s*0.62, -s*0.08, Math.max(1.2, s*0.07), 0, Math.PI*2);
+  ctx.strokeStyle = colors.eye;
+  ctx.lineWidth = 1.3;
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+const PLAYER_COLORS = { body:'#ff9d5c', fin:'#ffd194', eye:'#fff4e6' };
+
+/* ============================= BUBBLES ============================= */
+
+let bubbles = [];
+function spawnBubble(nearPlayer){
+  const x = nearPlayer
+    ? player.x + rand(-W*0.6, W*0.6)
+    : camX() + rand(-100, W+100);
+  bubbles.push({
+    x, y: floorY(x) - rand(0,20),
+    r: rand(1.5, 5.5),
+    speed: rand(0.4,1.3),
+    wobble: rand(0,Math.PI*2),
+    bright: nearPlayer
+  });
+  if(bubbles.length > 140) bubbles.shift();
+}
+
+function updateBubbles(dt){
+  for(const b of bubbles){
+    b.y -= b.speed*dt;
+    b.x += Math.sin(performance.now()*0.001 + b.wobble)*0.15*dt;
+  }
+  bubbles = bubbles.filter(b => b.y > SURFACE_Y - 30);
+}
+
+function drawBubbles(){
+  ctx.lineWidth = 1.2;
+  for(const b of bubbles){
+    const sx = b.x - camX(), sy = b.y - camY();
+    if(sx < -20 || sx > W+20 || sy < -20 || sy > H+20) continue;
+    ctx.beginPath();
+    ctx.arc(sx, sy, b.r, 0, Math.PI*2);
+    ctx.strokeStyle = b.bright ? 'rgba(223,246,255,0.55)' : 'rgba(223,246,255,0.22)';
+    ctx.stroke();
+  }
+}
+
+/* ============================= CAMERA ============================= */
+
+function camX(){ return player.x - W/2; }
+function camY(){ return player.y - H/2 + player.bob; }
+
+/* ============================= SCHOOLS OF FISH ============================= */
+
+const schools = [];
+const SCHOOL_PALETTES = [
+  {body:'#7fe8d4', fin:'#bdfff0', eye:'#08332b'},
+  {body:'#ffd45e', fin:'#fff0bd', eye:'#3a2c00'},
+  {body:'#9ec8ff', fin:'#dceaff', eye:'#0b2347'},
+  {body:'#ff8fa3', fin:'#ffd6df', eye:'#3a0a16'}
+];
+
+function spawnSchool(x,y){
+  const palette = SCHOOL_PALETTES[randi(0,SCHOOL_PALETTES.length-1)];
+  const count = randi(5,9);
+  const members = [];
+  for(let i=0;i<count;i++){
+    const ang = rand(0,Math.PI*2);
+    const rad = rand(8,30);
+    members.push({
+      offAngle: ang,
+      offRad: rad,
+      rotSpeed: rand(0.15,0.4) * (Math.random()<0.5?-1:1),
+      phase: rand(0,Math.PI*2),
+      size: rand(6,9)
+    });
+  }
+  schools.push({
+    type:'school',
+    x, y,
+    vx: rand(-1,1), vy: rand(-0.3,0.3),
+    targetX: x + rand(-300,300),
+    targetY: clamp(y + rand(-200,200), WORLD_TOP_MARGIN+60, SEAFLOOR_Y-200),
+    retarget: rand(120,260),
+    speed: rand(1.0,1.8),
+    palette,
+    members
+  });
+}
+
+function updateSchool(s, dt){
+  s.retarget -= dt;
+  if(s.retarget <= 0){
+    s.targetX = s.x + rand(-350,350);
+    s.targetY = clamp(s.y + rand(-220,220), WORLD_TOP_MARGIN+60, SEAFLOOR_Y-200);
+    s.retarget = rand(140,300);
+  }
+  const dx = s.targetX - s.x, dy = s.targetY - s.y;
+  const d = Math.hypot(dx,dy) || 1;
+  const desiredVx = (dx/d) * s.speed;
+  const desiredVy = (dy/d) * s.speed;
+  s.vx = lerp(s.vx, desiredVx, 0.02*dt);
+  s.vy = lerp(s.vy, desiredVy, 0.02*dt);
+  s.x += s.vx*dt;
+  s.y += s.vy*dt;
+  s.y = clamp(s.y, WORLD_TOP_MARGIN+20, SEAFLOOR_Y-40);
+
+  for(const m of s.members){
+    m.offAngle += m.rotSpeed*0.02*dt;
+    m.phase += 0.18*dt;
+  }
+}
+
+function drawSchool(s){
+  const heading = Math.atan2(s.vy, s.vx);
+  for(const m of s.members){
+    const mx = s.x + Math.cos(m.offAngle)*m.offRad - camX();
+    const my = s.y + Math.sin(m.offAngle)*m.offRad*0.6 - camY();
+    if(mx < -30 || mx > W+30 || my < -30 || my > H+30) continue;
+    drawFish(mx, my, heading, m.size, s.palette, m.phase, 0.8, Math.sin(m.offAngle)*0.3);
+  }
+}
+
+/* ============================= JELLYFISH ============================= */
+
+const JELLY_COLORS = ['#d59bff','#ff9bd2','#9bd2ff','#c8ffe0'];
+
+function spawnJellyfish(x,y){
+  return {
+    type:'jelly',
+    x, y,
+    baseY: y,
+    color: JELLY_COLORS[randi(0,JELLY_COLORS.length-1)],
+    phase: rand(0,Math.PI*2),
+    driftPhase: rand(0,Math.PI*2),
+    size: rand(14,24),
+    tentacles: randi(4,6)
+  };
+}
+
+function updateJelly(j, dt){
+  j.phase += 0.025*dt;
+  j.driftPhase += 0.006*dt;
+  j.y = clamp(j.baseY + Math.sin(j.driftPhase)*45, WORLD_TOP_MARGIN+40, SEAFLOOR_Y-40);
+  j.x += Math.sin(j.driftPhase*1.3)*0.25*dt;
+}
+
+function drawJelly(j){
+  const sx = j.x - camX(), sy = j.y - camY();
+  if(sx < -60 || sx > W+60 || sy < -60 || sy > H+60) return;
+  const pulse = 1 + Math.sin(j.phase*3)*0.18;
+  const s = j.size;
+
+  ctx.save();
+  ctx.translate(sx,sy);
+  ctx.strokeStyle = j.color;
+  ctx.globalAlpha = 0.8;
+  ctx.lineWidth = 1.6;
+
+  ctx.beginPath();
+  ctx.moveTo(-s*pulse, 0);
+  ctx.quadraticCurveTo(-s*0.7*pulse, -s*0.95, 0, -s*0.95);
+  ctx.quadraticCurveTo(s*0.7*pulse, -s*0.95, s*pulse, 0);
+  ctx.quadraticCurveTo(0, s*0.35, -s*pulse, 0);
+  ctx.stroke();
+
+  for(let i=0;i<j.tentacles;i++){
+    const tx = lerp(-s*0.8, s*0.8, i/(j.tentacles-1));
+    ctx.beginPath();
+    ctx.moveTo(tx, s*0.2);
+    let py = s*0.2;
+    for(let seg=1;seg<=4;seg++){
+      const ny = s*0.2 + seg*s*0.45;
+      const nx = tx + Math.sin(j.phase*4 + i + seg)*s*0.22;
+      ctx.lineTo(nx, ny);
+      py = ny;
+    }
+    ctx.globalAlpha = 0.5;
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+/* ============================= CRABS ============================= */
+
+function spawnCrab(x){
+  const fx = clamp(x, -1e9, 1e9);
+  return {
+    type:'crab',
+    x: fx,
+    dir: Math.random()<0.5?-1:1,
+    walkPhase: rand(0,Math.PI*2),
+    color: Math.random()<0.5 ? '#ff7a5c' : '#e0552f',
+    size: rand(8,13),
+    pauseTimer: rand(60,180)
+  };
+}
+
+function updateCrab(c, dt){
+  c.pauseTimer -= dt;
+  if(c.pauseTimer <= 0){
+    if(Math.random() < 0.5) c.dir *= -1;
+    c.pauseTimer = rand(60,220);
+  }
+  c.x += c.dir * 0.5 * dt;
+  c.walkPhase += 0.25*dt;
+}
+
+function drawCrab(c){
+  const fy = floorY(c.x);
+  const sx = c.x - camX(), sy = fy - camY();
+  if(sx < -40 || sx > W+40 || sy < -40 || sy > H+40) return;
+  const s = c.size;
+  const legSwing = Math.sin(c.walkPhase) * 0.35;
+
+  ctx.save();
+  ctx.translate(sx, sy - s*0.3);
+  if(c.dir < 0) ctx.scale(-1,1);
+  ctx.strokeStyle = c.color;
+  ctx.lineWidth = Math.max(1.3, s*0.13);
+  ctx.lineCap = 'round';
+
+  // body
+  ctx.beginPath();
+  ctx.ellipse(0,0, s, s*0.62, 0, 0, Math.PI*2);
+  ctx.stroke();
+
+  // eyes
+  ctx.beginPath();
+  ctx.moveTo(-s*0.3, -s*0.5); ctx.lineTo(-s*0.4, -s*0.85);
+  ctx.moveTo(s*0.3, -s*0.5); ctx.lineTo(s*0.4, -s*0.85);
+  ctx.stroke();
+
+  // claws
+  ctx.beginPath();
+  ctx.moveTo(-s*0.95, -s*0.1);
+  ctx.lineTo(-s*1.5, -s*0.5 + legSwing*s*0.4);
+  ctx.moveTo(s*0.95, -s*0.1);
+  ctx.lineTo(s*1.5, -s*0.5 - legSwing*s*0.4);
+  ctx.stroke();
+
+  // legs
+  for(let i=0;i<3;i++){
+    const lx = lerp(-s*0.7, s*0.7, i/2);
+    const sw = Math.sin(c.walkPhase + i*1.3) * s*0.4;
+    ctx.beginPath();
+    ctx.moveTo(lx, s*0.4);
+    ctx.lineTo(lx + sw*0.4, s*0.95 + Math.abs(sw)*0.2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* ============================= TURTLES ============================= */
+
+function spawnTurtle(x,y){
+  return {
+    type:'turtle',
+    x, y,
+    vx: rand(-1,1)||0.5, vy: rand(-0.2,0.2),
+    targetX: x + rand(-400,400),
+    targetY: clamp(y + rand(-150,150), WORLD_TOP_MARGIN+80, SEAFLOOR_Y-150),
+    retarget: rand(200,400),
+    angle: 0, displayAngle:0,
+    flipperPhase: rand(0,Math.PI*2),
+    size: rand(22,30)
+  };
+}
+
+function updateTurtle(t, dt){
+  t.retarget -= dt;
+  if(t.retarget <= 0){
+    t.targetX = t.x + rand(-500,500);
+    t.targetY = clamp(t.y + rand(-200,200), WORLD_TOP_MARGIN+80, SEAFLOOR_Y-150);
+    t.retarget = rand(250,450);
+  }
+  const dx = t.targetX-t.x, dy = t.targetY-t.y;
+  const d = Math.hypot(dx,dy)||1;
+  t.vx = lerp(t.vx, (dx/d)*0.9, 0.01*dt);
+  t.vy = lerp(t.vy, (dy/d)*0.9, 0.01*dt);
+  t.x += t.vx*dt; t.y += t.vy*dt;
+  t.angle = Math.atan2(t.vy, t.vx);
+  t.displayAngle = lerpAngle(t.displayAngle, t.angle, 0.03*dt);
+  t.flipperPhase += 0.05*dt;
+}
+
+function drawTurtle(t){
+  const sx = t.x - camX(), sy = t.y - camY();
+  if(sx < -80 || sx > W+80 || sy < -80 || sy > H+80) return;
+  const s = t.size;
+  ctx.save();
+  ctx.translate(sx,sy);
+  ctx.rotate(t.displayAngle);
+  ctx.strokeStyle = '#5fd17a';
+  ctx.lineWidth = Math.max(1.6, s*0.07);
+  ctx.lineCap = 'round';
+
+  // shell
+  ctx.beginPath();
+  ctx.ellipse(0,0, s*0.95, s*0.65, 0, 0, Math.PI*2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-s*0.5,-s*0.3); ctx.lineTo(s*0.5,-s*0.3);
+  ctx.moveTo(-s*0.5,0); ctx.lineTo(s*0.5,0);
+  ctx.moveTo(-s*0.5,s*0.3); ctx.lineTo(s*0.5,s*0.3);
+  ctx.globalAlpha = 0.5;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // head
+  ctx.beginPath();
+  ctx.moveTo(s*0.85,0);
+  ctx.lineTo(s*1.25, 0);
+  ctx.stroke();
+
+  // flippers
+  const fw = Math.sin(t.flipperPhase)*0.5;
+  ctx.beginPath();
+  ctx.moveTo(s*0.2, -s*0.5);
+  ctx.lineTo(s*0.55, -s*0.95 + fw*s*0.3);
+  ctx.moveTo(-s*0.5, -s*0.4);
+  ctx.lineTo(-s*0.85, -s*0.8 - fw*s*0.3);
+  ctx.moveTo(s*0.2, s*0.5);
+  ctx.lineTo(s*0.55, s*0.95 - fw*s*0.3);
+  ctx.moveTo(-s*0.5, s*0.4);
+  ctx.lineTo(-s*0.85, s*0.8 + fw*s*0.3);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+/* ============================= SHARKS (rare) ============================= */
+
+function spawnShark(x,y){
+  return {
+    type:'shark',
+    x, y,
+    vx: Math.random()<0.5?-1:1, vy: 0,
+    targetX: x + (Math.random()<0.5?-1:1)*rand(900,1500),
+    angle:0, displayAngle:0,
+    tailPhase: rand(0,10),
+    size: rand(34,46),
+    life: rand(900,1500)
+  };
+}
+
+function updateShark(sh, dt){
+  const dx = sh.targetX - sh.x;
+  sh.vx = lerp(sh.vx, Math.sign(dx)*2.1, 0.01*dt);
+  sh.vy = lerp(sh.vy, Math.sin(performance.now()*0.0006+sh.x*0.001)*0.4, 0.02*dt);
+  sh.x += sh.vx*dt; sh.y += sh.vy*dt;
+  sh.y = clamp(sh.y, WORLD_TOP_MARGIN+100, SEAFLOOR_Y-150);
+  sh.angle = Math.atan2(sh.vy, sh.vx);
+  sh.displayAngle = lerpAngle(sh.displayAngle, sh.angle, 0.05*dt);
+  sh.tailPhase += 0.1*dt*3;
+  sh.life -= dt;
+}
+
+const SHARK_COLORS = { body:'#9aa6b2', fin:'#cfd8e0', eye:'#10151a' };
+function drawShark(sh){
+  const sx = sh.x - camX(), sy = sh.y - camY();
+  if(sx < -120 || sx > W+120 || sy < -120 || sy > H+120) return;
+  drawFish(sx, sy, sh.displayAngle, sh.size, SHARK_COLORS, sh.tailPhase, 1, 0);
+  // dorsal fin accent
+  ctx.save();
+  ctx.translate(sx,sy);
+  ctx.rotate(sh.displayAngle);
+  ctx.beginPath();
+  ctx.moveTo(0,-sh.size*0.25);
+  ctx.lineTo(sh.size*0.15, -sh.size*0.9);
+  ctx.lineTo(sh.size*0.4,-sh.size*0.2);
+  ctx.strokeStyle = SHARK_COLORS.fin;
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* ============================= NPC MANAGER ============================= */
+
+let npcs = []; // jelly, crab, turtle, shark
+const SPAWN_RADIUS_MIN = 700;
+const SPAWN_RADIUS_MAX = 1300;
+const DESPAWN_RADIUS = 2100;
+const MAX_NPCS = 60;
+const MAX_SCHOOLS = 9;
+
+let spawnTimer = 0;
+
+function totalCreatureCount(){
+  let n = npcs.length;
+  for(const s of schools) n += s.members.length;
+  return n;
+}
+
+function trySpawn(dt){
+  spawnTimer -= dt;
+  if(spawnTimer > 0) return;
+  spawnTimer = rand(40,110);
+  if(totalCreatureCount() >= MAX_NPCS) return;
+
+  const angle = rand(0, Math.PI*2);
+  const d = rand(SPAWN_RADIUS_MIN, SPAWN_RADIUS_MAX);
+  let x = player.x + Math.cos(angle)*d;
+  let y = clamp(player.y + Math.sin(angle)*d, WORLD_TOP_MARGIN+40, SEAFLOOR_Y-40);
+
+  const r = Math.random();
+  if(r < 0.40 && schools.length < MAX_SCHOOLS){
+    spawnSchool(x,y);
+  } else if(r < 0.62){
+    npcs.push(spawnJellyfish(x, clamp(y, WORLD_TOP_MARGIN+60, SEAFLOOR_Y-300)));
+  } else if(r < 0.84){
+    npcs.push(spawnCrab(x));
+  } else if(r < 0.95){
+    npcs.push(spawnTurtle(x,y));
+  } else {
+    npcs.push(spawnShark(x,y));
+  }
+}
+
+function updateNPCs(dt){
+  for(const n of npcs){
+    if(n.type==='jelly') updateJelly(n, dt);
+    else if(n.type==='crab') updateCrab(n, dt);
+    else if(n.type==='turtle') updateTurtle(n, dt);
+    else if(n.type==='shark') updateShark(n, dt);
+  }
+  npcs = npcs.filter(n=>{
+    if(n.type==='shark' && n.life <= 0) return false;
+    return dist2(n.x,n.y,player.x,player.y) < DESPAWN_RADIUS*DESPAWN_RADIUS;
+  });
+
+  for(const s of schools) updateSchool(s, dt);
+  for(let i=schools.length-1;i>=0;i--){
+    if(dist2(schools[i].x,schools[i].y,player.x,player.y) > DESPAWN_RADIUS*DESPAWN_RADIUS){
+      schools.splice(i,1);
+    }
+  }
+}
+
+function drawNPCs(){
+  for(const s of schools) drawSchool(s);
+  for(const n of npcs){
+    if(n.type==='jelly') drawJelly(n);
+    else if(n.type==='turtle') drawTurtle(n);
+    else if(n.type==='shark') drawShark(n);
+  }
+  // crabs drawn last so they sit on top of the sand
+  for(const n of npcs){
+    if(n.type==='crab') drawCrab(n);
+  }
+}
+
+/* ============================= SEAFLOOR & DECOR ============================= */
+
+function drawSeafloorAndDecor(time){
+  const left = camX() - 100;
+  const right = camX() + W + 100;
+  const cellSize = 70;
+  const firstCell = Math.floor(left/cellSize) - 1;
+  const lastCell = Math.floor(right/cellSize) + 1;
+
+  // sand silhouette
+  ctx.beginPath();
+  let started = false;
+  for(let wx = left; wx <= right; wx += 24){
+    const fy = floorY(wx) - camY();
+    if(fy < -40) continue;
+    if(!started){ ctx.moveTo(wx-camX(), fy); started = true; }
+    else ctx.lineTo(wx-camX(), fy);
+  }
+  if(started){
+    ctx.lineTo(right-camX(), H+50);
+    ctx.lineTo(left-camX(), H+50);
+    ctx.closePath();
+    const sandGrad = ctx.createLinearGradient(0, floorY(player.x)-camY(), 0, H);
+    sandGrad.addColorStop(0, '#c9a86a');
+    sandGrad.addColorStop(1, '#5c4827');
+    ctx.fillStyle = sandGrad;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,240,200,0.4)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    started = false;
+    for(let wx = left; wx <= right; wx += 24){
+      const fy = floorY(wx) - camY();
+      if(fy < -40 || fy > H+40) continue;
+      if(!started){ ctx.moveTo(wx-camX(), fy); started = true; }
+      else ctx.lineTo(wx-camX(), fy);
+    }
+    ctx.stroke();
+  }
+
+  // decorations: seaweed / rocks / coral, deterministic per cell
+  for(let i=firstCell; i<=lastCell; i++){
+    const h = hash(i*1.7+0.3);
+    const wx = i*cellSize + hash(i*2.91)*30;
+    const fy = floorY(wx);
+    const sx = wx - camX(), sy = fy - camY();
+    if(sx < -60 || sx > W+60) continue;
+    if(sy < -100 || sy > H+100) continue;
+
+    if(h < 0.30){
+      drawSeaweed(sx, sy, hash(i*3.3), time);
+    } else if(h < 0.45){
+      drawRock(sx, sy, hash(i*4.1));
+    } else if(h < 0.58){
+      drawCoral(sx, sy, hash(i*5.7));
+    }
+  }
+}
+
+function drawSeaweed(sx, sy, seed, time){
+  const blades = 2 + Math.floor(seed*3);
+  const baseHue = 140 + seed*40;
+  for(let b=0; b<blades; b++){
+    const bx = sx + (b - blades/2)*5;
+    const height = 26 + seed*40 + b*4;
+    const sway = Math.sin(time*0.0012 + seed*10 + b) * 10;
+    ctx.beginPath();
+    ctx.moveTo(bx, sy);
+    ctx.quadraticCurveTo(bx + sway*0.5, sy - height*0.55, bx + sway, sy - height);
+    ctx.strokeStyle = `hsla(${baseHue},55%,${38+b*4}%,0.85)`;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  }
+}
+
+function drawRock(sx, sy, seed){
+  const s = 10 + seed*18;
+  ctx.beginPath();
+  ctx.moveTo(sx - s, sy);
+  ctx.lineTo(sx - s*0.6, sy - s*0.7);
+  ctx.lineTo(sx, sy - s*0.95);
+  ctx.lineTo(sx + s*0.7, sy - s*0.5);
+  ctx.lineTo(sx + s, sy);
+  ctx.closePath();
+  ctx.strokeStyle = 'rgba(150,160,170,0.7)';
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+}
+
+function drawCoral(sx, sy, seed){
+  const branches = 3 + Math.floor(seed*3);
+  const hue = 10 + seed*40;
+  for(let i=0;i<branches;i++){
+    const ang = -Math.PI/2 + (i - branches/2)*0.4 + seed;
+    const len = 14 + seed*20;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    const mx = sx + Math.cos(ang)*len*0.6;
+    const my = sy + Math.sin(ang)*len*0.6;
+    const ex = sx + Math.cos(ang)*len;
+    const ey = sy + Math.sin(ang)*len;
+    ctx.lineTo(mx,my);
+    ctx.lineTo(ex,ey);
+    ctx.strokeStyle = `hsla(${hue},70%,60%,0.8)`;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  }
+}
+
+/* ============================= SUN RAYS ============================= */
+
+function drawSunRays(time){
+  const depthFrac = clamp(player.y / SEAFLOOR_Y, 0, 1);
+  if(depthFrac > 0.5) return;
+  const alpha = (1 - depthFrac/0.5) * 0.16;
+  if(alpha <= 0.005) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#fff7d6';
+  const count = 6;
+  for(let i=0;i<count;i++){
+    const baseX = ((i*260 + time*0.01) % (W+400)) - 200 - (camX()*0.05 % 260);
+    ctx.save();
+    ctx.translate(baseX, -camY()*0.1);
+    ctx.rotate(0.25);
+    ctx.fillRect(0, -50, 60, H+200);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+/* ============================= BACKGROUND ============================= */
+
+function drawWater(){
+  const topFrac = clamp(camY() / SEAFLOOR_Y, 0, 1);
+  const botFrac = clamp((camY()+H) / SEAFLOOR_Y, 0, 1);
+  const c1 = colorAtDepthFraction(topFrac);
+  const c2 = colorAtDepthFraction(botFrac);
+  const grad = ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0, `rgb(${c1[0]},${c1[1]},${c1[2]})`);
+  grad.addColorStop(1, `rgb(${c2[0]},${c2[1]},${c2[2]})`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,W,H);
+
+  // surface line
+  const surfaceScreenY = SURFACE_Y - camY();
+  if(surfaceScreenY > -20 && surfaceScreenY < H+20){
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for(let x=0;x<=W;x+=16){
+      const wy = surfaceScreenY + Math.sin((x+camX())*0.02 + performance.now()*0.002)*4;
+      if(x===0) ctx.moveTo(x,wy); else ctx.lineTo(x,wy);
+    }
+    ctx.stroke();
+  }
+}
+
+/* ============================= HUD ============================= */
+
+const depthValEl = document.getElementById('depthVal');
+const depthDotEl = document.getElementById('depthdot');
+const depthBarEl = document.getElementById('depthbar');
+
+function updateHUD(){
+  const meters = Math.round((player.y - SURFACE_Y)/8);
+  depthValEl.textContent = meters;
+  const frac = clamp(player.y / SEAFLOOR_Y, 0, 1);
+  const barH = depthBarEl.clientHeight;
+  depthDotEl.style.top = (frac*(barH-16)) + 'px';
+}
+
+/* ============================= MAIN LOOP ============================= */
+
+let lastTime = performance.now();
+let bubbleSpawnTimer = 0;
+
+// seed the world with some initial life so it's not empty on load
+for(let i=0;i<6;i++){
+  const x = player.x + rand(-900,900);
+  const y = clamp(player.y + rand(-500,500), 200, SEAFLOOR_Y-200);
+  const r = Math.random();
+  if(r<0.4) spawnSchool(x,y);
+  else if(r<0.7) npcs.push(spawnJellyfish(x,y));
+  else npcs.push(spawnCrab(x));
+}
+
+function frame(now){
+  let dt = (now - lastTime) / 16.6667;
+  dt = clamp(dt, 0, 2.5);
+  lastTime = now;
+
+  const speed = updatePlayer(dt);
+  updateNPCs(dt);
+  trySpawn(dt);
+
+  bubbleSpawnTimer -= dt;
+  if(bubbleSpawnTimer <= 0){
+    bubbleSpawnTimer = rand(4,10);
+    spawnBubble(false);
+    if(speed > 0.5 && Math.random()<0.6) spawnBubble(true);
+  }
+  updateBubbles(dt);
+
+  ctx.clearRect(0,0,W,H);
+  drawWater();
+  drawSunRays(now);
+  drawBubbles();
+  drawSeafloorAndDecor(now);
+  drawNPCs();
+  drawFish(W/2, H/2 + player.bob, player.displayAngle, player.size, PLAYER_COLORS, player.tailPhase, speed/player.maxSpeed, 0);
+  updateHUD();
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+})();
+</script>
+</body>
+</html>
