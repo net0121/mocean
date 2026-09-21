@@ -276,13 +276,13 @@ html,body{
   position:fixed; top:14px; left:14px;
   color:var(--foam);
   font-size:14px; letter-spacing:0.5px;
-  text-shadow:0 1px 3px rgba(0,0,0,0.6);
+  text-shadow:0 1px 2px rgba(0,0,0,0.7), 0 0 6px rgba(0,0,0,0.45);
   pointer-events:none;
   user-select:none;
   z-index:5;
   transition:opacity 0.6s ease;
 }
-#hud .label{ opacity:0.65; font-size:11px; text-transform:uppercase; letter-spacing:1.5px; }
+#hud .label{ opacity:0.85; font-size:11px; text-transform:uppercase; letter-spacing:1.5px; }
 #hud .value{ font-size:20px; font-weight:600; }
 
 /* Watery 24-hour digital clock for day/night cycle */
@@ -316,6 +316,99 @@ html,body{
 @keyframes clockShimmer {
   0%, 100% { background-position:0% 50%; }
   50% { background-position:100% 50%; }
+}
+
+/* ============================= XP / LEVEL ============================= */
+
+#xp-panel{
+  margin-top:10px;
+  width:190px;
+  font-family:'Roboto Mono', monospace;
+}
+#xp-panel .xp-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:baseline;
+  font-size:11px;
+  letter-spacing:0.5px;
+  margin-bottom:4px;
+}
+#xp-panel .xp-level{
+  font-size:15px;
+  font-weight:600;
+  color:#ffc08f;
+  text-shadow:0 1px 3px rgba(0,0,0,0.6);
+}
+#xp-panel #xpText{ opacity:0.75; }
+.xp-bar{
+  height:8px;
+  background:rgba(2,16,25,0.6);
+  border:1px solid rgba(223,246,255,0.25);
+  border-radius:6px;
+  overflow:hidden;
+}
+#xpFill{
+  height:100%;
+  width:0%;
+  background:linear-gradient(90deg, #ff9d5c, #ffd194);
+  box-shadow:0 0 8px rgba(255,157,92,0.6);
+  transition:width 0.35s ease;
+}
+
+.xp-pop{
+  position:fixed;
+  transform:translate(-50%, 0);
+  font-family:'Roboto Mono', monospace;
+  font-size:15px;
+  font-weight:600;
+  color:#ffe28a;
+  text-shadow:0 1px 4px rgba(0,0,0,0.8);
+  white-space:pre;
+  pointer-events:none;
+  user-select:none;
+  z-index:40;
+  animation:xpFloat 1.2s ease-out forwards;
+}
+.xp-pop.flip{ color:#9be8ff; font-size:17px; }
+.xp-pop.warn{ color:#ff8f8f; }
+
+@keyframes xpFloat{
+  0%   { opacity:0; transform:translate(-50%, 8px); }
+  15%  { opacity:1; }
+  100% { opacity:0; transform:translate(-50%, -48px); }
+}
+
+#levelup-banner{
+  position:fixed;
+  left:50%; top:22%;
+  transform:translate(-50%, 0);
+  text-align:center;
+  pointer-events:none;
+  user-select:none;
+  opacity:0;
+  z-index:45;
+  text-shadow:0 2px 12px rgba(0,0,0,0.7);
+}
+#levelup-banner .lu-small{
+  color:#ffc08f;
+  font-size:14px;
+  letter-spacing:6px;
+  text-transform:uppercase;
+}
+#levelup-banner .lu-big{
+  color:var(--foam);
+  font-size:44px;
+  font-weight:700;
+  letter-spacing:3px;
+}
+#levelup-banner.show{ animation:levelPop 2.4s ease-out forwards; }
+
+@keyframes levelPop{
+  0%   { opacity:0; transform:translate(-50%, 20px) scale(0.8); }
+  12%  { opacity:1; transform:translate(-50%, 0) scale(1.08); }
+  22%  { transform:translate(-50%, 0) scale(1); }
+  80%  { opacity:1; }
+  100% { opacity:0; transform:translate(-50%, -24px) scale(1); }
 }
 
 #creature-tooltip{
@@ -407,4 +500,30 @@ html,body{
 @media (pointer:fine){
   .touch-area { display:none; }
   .touch-hint { display:none; }
+}
+
+/* Touch jump button (only on touch devices) */
+#jump-button{
+  position:fixed;
+  right:24px;
+  bottom:40px;
+  width:84px;
+  height:84px;
+  border-radius:50%;
+  border:2px solid rgba(255,157,92,0.8);
+  background:rgba(255,157,92,0.35);
+  color:var(--foam);
+  font-family:inherit;
+  font-size:14px;
+  font-weight:600;
+  letter-spacing:1px;
+  text-transform:uppercase;
+  display:none;
+  pointer-events:auto;
+  touch-action:none;
+  user-select:none;
+}
+#jump-button:active{ background:rgba(255,157,92,0.65); }
+@media (pointer:coarse){
+  #jump-button{ display:block; }
 }
