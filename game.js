@@ -12,6 +12,7 @@ const app = new PIXI.Application({
 });
 document.getElementById('pixi-root').appendChild(app.view);
 
+const skyG = new PIXI.Graphics();
 const world = new PIXI.Container();
 const terrainG = new PIXI.Graphics();
 const surfaceG = new PIXI.Graphics();
@@ -20,6 +21,7 @@ const splashG = new PIXI.Graphics();
 const creaturesLayer = new PIXI.Container();
 const waterOverlayG = new PIXI.Graphics();
 
+app.stage.addChild(skyG);
 app.stage.addChild(world);
 world.addChild(terrainG);
 world.addChild(bubblesG);
@@ -70,8 +72,14 @@ const GRAVITY = 0.15;
 const FLIP_SPEED_THRESHOLD = 0.8;
 
 const CYCLE_DURATION = 120000;
+const CLOCK_START = 9/24;   // the game begins at 09:00
+// 0..1 through the day, 0 = midnight, 0.5 = noon
 function getCycleTime(now){
-  return (now % CYCLE_DURATION) / CYCLE_DURATION;
+  return ((now + CYCLE_DURATION*CLOCK_START) % CYCLE_DURATION) / CYCLE_DURATION;
+}
+// 0 = dead of night, 1 = high noon
+function getDaylight(now){
+  return 0.5 - 0.5*Math.cos(getCycleTime(now)*Math.PI*2);
 }
 
 function floorY(x){
@@ -81,14 +89,24 @@ function floorY(x){
     + Math.sin(x*0.05+7)*9;
 }
 
+// Water is always noticeably darker than the sky above it, and gets darker quickly with depth
 const DEPTH_STOPS = [
-  {stop:0.00, color:[133,221,235]},
-  {stop:0.12, color:[72,170,205]},
-  {stop:0.30, color:[34,116,170]},
-  {stop:0.55, color:[18,72,122]},
-  {stop:0.78, color:[10,38,72]},
-  {stop:1.00, color:[3,12,26]}
+  {stop:0.00, color:[30,120,168]},
+  {stop:0.06, color:[22,98,146]},
+  {stop:0.15, color:[14,70,116]},
+  {stop:0.32, color:[9,46,84]},
+  {stop:0.55, color:[5,28,56]},
+  {stop:0.80, color:[3,14,32]},
+  {stop:1.00, color:[1,6,14]}
 ];
+
+const SKY_DAY_TOP    = [82,168,232];
+const SKY_DAY_HOR    = [176,226,247];
+const SKY_DUSK_TOP   = [62,70,140];
+const SKY_DUSK_HOR   = [250,160,120];
+const SKY_NIGHT_TOP  = [4,8,24];
+const SKY_NIGHT_HOR  = [30,42,82];
+const SKY_HEIGHT     = 1400;
 function colorAtDepthFraction(f){
   f = clamp(f,0,1);
   for(let i=0;i<DEPTH_STOPS.length-1;i++){
@@ -108,7 +126,7 @@ const debugDisplay = document.createElement('div');
 debugDisplay.id = 'debug-display';
 debugDisplay.style.cssText = `
   position: fixed;
-  top: 100px;
+  top: 190px;
   left: 14px;
   background: rgba(0,0,0,0.85);
   color: #0f0;
@@ -136,8 +154,8 @@ window.addEventListener('keydown', (e)=>{
 function updateDebugDisplay(){
   if(!debugMode) return;
   const cycleTime = getCycleTime(performance.now());
-  const timeOfDay = cycleTime < 0.5 ? 'DAY' : 'NIGHT';
-  const brightness = cycleTime < 0.5 ? (1 - cycleTime*2) : (cycleTime*2 - 1);
+  const brightness = getDaylight(performance.now());
+  const timeOfDay = brightness >= 0.5 ? 'DAY' : 'NIGHT';
   debugDisplay.innerHTML = `
     X: ${Math.round(player.x)}<br>
     Y: ${Math.round(player.y)}<br>
@@ -147,7 +165,10 @@ function updateDebugDisplay(){
     <br>
     Time: ${timeOfDay}<br>
     Cycle: ${(cycleTime*100).toFixed(1)}%<br>
-    Brightness: ${(brightness*100).toFixed(1)}%
+    Daylight: ${(brightness*100).toFixed(1)}%<br>
+    <br>
+    Level: ${progress.level}<br>
+    XP: ${progress.xp} / ${xpNeeded(progress.level)}
   `;
 }
 
@@ -159,6 +180,15 @@ let commandOpen = false;
 /* ============================= INPUT ============================= */
 
 const keys = { up:false, down:false, left:false, right:false, space:false };
+
+const instructionsEl = document.getElementById('instructions');
+function hideInstructions(){ instructionsEl.classList.add('hide'); }
+// After the first input, keep the hint up a little longer so it can actually be read
+let hintHideTimer = null;
+function scheduleHideInstructions(ms){
+  if(hintHideTimer) return;
+  hintHideTimer = setTimeout(hideInstructions, ms);
+}
 
 window.addEventListener('keydown', (e)=>{
   if(commandOpen) return;
@@ -173,9 +203,9 @@ window.addEventListener('keydown', (e)=>{
     case 'ArrowDown': keys.down=true; e.preventDefault(); break;
     case 'ArrowLeft': keys.left=true; e.preventDefault(); break;
     case 'ArrowRight': keys.right=true; e.preventDefault(); break;
-    case ' ': keys.space=true; e.preventDefault(); break;
+    case ' ': keys.space=true; if(!e.repeat) tryJump(); e.preventDefault(); break;
   }
-  hideInstructions();
+  scheduleHideInstructions(8000);
 }, {passive:false});
 
 window.addEventListener('keyup', (e)=>{
@@ -234,7 +264,7 @@ function handleTouchStart(e){
   touchStartY = touch.clientY;
   touchCurrentX = touch.clientX;
   touchCurrentY = touch.clientY;
-  hideInstructions();
+  scheduleHideInstructions(8000);
   updateTouchKnob();
 }
 
@@ -250,6 +280,11 @@ function handleTouchMove(e){
 function handleTouchEnd(e){
   touchActive = false;
   updateTouchKnob();
+}
+
+const jumpButtonEl = document.getElementById('jump-button');
+if(jumpButtonEl){
+  jumpButtonEl.addEventListener('pointerdown', (e)=>{ e.preventDefault(); tryJump(); });
 }
 
 touchArea.addEventListener('touchstart', handleTouchStart, {passive:false});
@@ -305,59 +340,196 @@ function attachHoverLabel(g, label, hitRadius){
   g.on('pointerout', ()=> hideHoverLabel(label));
 }
 
-/* ============================= FISH SHAPE ============================= */
+/* ============================= POLYGON FISH ============================= */
 
-function drawFishShape(g, size, colors, tailPhase, speedFrac, bank){
-  g.clear();
-  const s = size;
-  const speed = clamp(speedFrac, 0, 1);
-
-  const wagAmp = 0.30 + speed*0.55;
-  const waveAt = (xFrac, lag) => Math.sin(tailPhase - lag + xFrac*1.6) * wagAmp;
-
-  const wagMid = waveAt(0.55, 0);
-  const wagJoint = waveAt(0.85, 0.55);
-  const wagTip = waveAt(1.0, 1.05);
-
-  const bodyWave = Math.sin(tailPhase*0.5) * s * 0.045 * (0.35 + speed);
-  const stretch = 1 + speed*0.07;
-
-  const baseX = -s*0.85;
-  const jointX = -s*1.3*stretch, jointY = wagJoint*s*0.62;
-  const tipX = -s*1.95*stretch, tipY = wagJoint*s*0.62 + wagTip*s*0.95;
-  g.beginFill(colors.fin, 0.92);
-  g.moveTo(baseX, -s*0.16 + wagMid*s*0.08);
-  g.quadraticCurveTo(jointX, jointY - s*0.24, tipX, tipY - s*0.05);
-  g.quadraticCurveTo(jointX, jointY + s*0.24, baseX, s*0.16 + wagMid*s*0.08);
-  g.closePath();
-  g.endFill();
-
-  g.lineStyle({ width: Math.max(1.6, s*0.085), color: colors.body, ...ROUND });
-  g.moveTo(s*1.0*stretch, 0);
-  g.quadraticCurveTo(
-    s*0.5, -s*0.60 + bodyWave*0.4 + wagMid*s*0.10,
-    -s*0.85, -s*0.30 + bank*s*0.15 + bodyWave + wagJoint*s*0.12
-  );
-  g.quadraticCurveTo(-s*1.05, bodyWave + wagJoint*s*0.12, -s*0.85, s*0.30 - bank*s*0.15 + bodyWave + wagJoint*s*0.12);
-  g.quadraticCurveTo(s*0.5, s*0.62 + bodyWave*0.4 + wagMid*s*0.10, s*1.0*stretch, 0);
-
-  const ridgeFlutter = Math.sin(tailPhase*1.3) * 0.12;
-  g.lineStyle({ width: Math.max(1.4, s*0.07), color: colors.fin, ...ROUND });
-  g.moveTo(-s*0.22, -s*0.34 + bodyWave*0.5 + wagMid*s*0.08);
-  g.quadraticCurveTo(
-    -s*0.05, -s*0.50 + ridgeFlutter*s*0.10 + wagMid*s*0.08,
-    s*0.16, -s*0.36 + bodyWave*0.3 + wagMid*s*0.06
-  );
-
-  const row = Math.sin(tailPhase + 1.4) * 0.4 + 0.2;
-  g.moveTo(s*0.18, s*0.12);
-  g.quadraticCurveTo(s*0.05 + row*s*0.1, s*0.55, -s*0.15, s*0.42 + row*s*0.15);
-
-  g.lineStyle({ width: 1.3, color: colors.eye });
-  g.drawCircle(s*0.62*stretch, -s*0.08, Math.max(1.2, s*0.07));
+// Multiply a 0xRRGGBB colour: f < 1 darkens, f > 1 lightens towards white.
+function shadeColor(c, f){
+  let r = (c>>16)&255, g = (c>>8)&255, b = c&255;
+  if(f >= 1){
+    const t = f - 1;
+    r += (255-r)*t; g += (255-g)*t; b += (255-b)*t;
+  } else {
+    r *= f; g *= f; b *= f;
+  }
+  return (Math.round(r)<<16) | (Math.round(g)<<8) | Math.round(b);
 }
 
+// Per-species body plan. Every value is optional.
+//   h        body height multiplier          dorsal   dorsal fin height (0 = none)
+//   tail     tail size multiplier            tailU/L  upper / lower tail lobe length
+//   bill     length of a beak / tusk / sword billW    half-thickness of that bill
+//   hammer   hammerhead-style head           spines   number of lionfish-style spines
+const FISH_DEFAULTS = { h:1, dorsal:1, tail:1, tailU:0.52, tailL:0.52, bill:0, billW:0.07, hammer:false, spines:0 };
+
+function fishPalette(colors){
+  if(colors._p) return colors._p;
+  const body = colors.body, fin = colors.fin;
+  const belly = colors.belly !== undefined ? colors.belly : fin;
+  colors._p = {
+    sil:   shadeColor(body, 0.78),
+    topA:  shadeColor(body, 0.90),
+    topB:  shadeColor(body, 1.10),
+    botA:  shadeColor(belly, 0.93),
+    botB:  shadeColor(belly, 1.08),
+    tailA: shadeColor(body, 0.80),
+    tailB: shadeColor(body, 0.96),
+    tailM: shadeColor(fin, 0.88),
+    finA:  shadeColor(fin, 0.86),
+    finB:  shadeColor(fin, 1.04),
+    gill:  shadeColor(body, 0.55),
+    bill:  colors.billColor !== undefined ? colors.billColor : shadeColor(fin, 0.9),
+    s:     Object.assign({}, FISH_DEFAULTS, colors.shape || {})
+  };
+  return colors._p;
+}
+
+/*
+ * Draws a low-poly fish facing +x, centred on the Graphics origin.
+ * heading (radians) decides which way is "up" so a fish swimming left keeps
+ * its back on top instead of turning upside-down. Defaults to g.rotation.
+ */
+function drawFishShape(g, size, colors, tailPhase, speedFrac, bank, heading){
+  const s = size;
+  if(heading === undefined) heading = g.rotation;
+
+  // Skip creatures that are well off-screen
+  if(g.parent === creaturesLayer){
+    if(Math.abs(g.x - player.x) > app.screen.width/2 + s*3 + 80 ||
+       Math.abs(g.y - player.y) > app.screen.height/2 + s*3 + 80){
+      g.visible = false;
+      return;
+    }
+    g.visible = true;
+  }
+
+  // Ease the vertical mirror so turning around reads as a roll, not a pop
+  const wantFlip = Math.cos(heading) < 0 ? -1 : 1;
+  const cur = g._fy === undefined ? wantFlip : g._fy;
+  g._fy = cur + (wantFlip - cur)*0.2;
+  g.scale.y = g._fy;
+
+  g.clear();
+
+  const pal = fishPalette(colors);
+  const sh = pal.s;
+  const H = sh.h;
+  const speed = clamp(speedFrac, 0, 1);
+  const amp = 0.05 + speed*0.13;
+  const bk = bank || 0;
+
+  // Sideways swim wave, stronger towards the tail (x in units of s, head = +1)
+  const wig = (x)=>{
+    const k = clamp((0.9 - x)/1.8, 0, 1.6);
+    return Math.sin(tailPhase - x*1.8)*amp*k*k + bk*0.10*k;
+  };
+  const V = (x,y)=> [x*s, (y + wig(x))*s];
+
+  const tri = (col, a, b, c)=>{
+    g.beginFill(col);
+    g.drawPolygon([a[0],a[1], b[0],b[1], c[0],c[1]]);
+    g.endFill();
+  };
+  const poly = (col, pts, alpha)=>{
+    const flat = [];
+    for(const p of pts) flat.push(p[0], p[1]);
+    g.beginFill(col, alpha === undefined ? 1 : alpha);
+    g.drawPolygon(flat);
+    g.endFill();
+  };
+
+  // ---- body vertices ----
+  const N  = V( 1.00, 0.04);
+  const T0 = V( 0.50,-0.40*H), T1 = V(-0.10,-0.52*H), T2 = V(-0.58,-0.27*H), T3 = V(-0.92,-0.10*H);
+  const B0 = V( 0.50, 0.32*H), B1 = V(-0.05, 0.45*H), B2 = V(-0.58, 0.26*H), B3 = V(-0.92, 0.10*H);
+  const C1 = V( 0.34, 0.03),   C2 = V(-0.22, 0.03),   C3 = V(-0.62, 0.03),   P  = V(-0.94, 0.00);
+
+  // ---- things that sit behind the body ----
+  if(sh.bill > 0){
+    poly(pal.bill, [V(0.78,-sh.billW), V(1.0 + sh.bill, 0.01), V(0.78, sh.billW)]);
+  }
+
+  if(sh.spines > 0){
+    for(let i=0;i<sh.spines;i++){
+      const f = sh.spines > 1 ? i/(sh.spines-1) : 0.5;
+      const bx = lerp(0.35, -0.55, f);
+      const fan = Math.sin(tailPhase*0.8 + i*0.9)*0.06;
+      const col = (i%2) ? pal.finA : pal.finB;
+      tri(col, V(bx,-0.46*H), V(bx-0.30+fan,-0.52*H-0.60), V(bx-0.17,-0.46*H));
+      tri(col, V(bx, 0.42*H), V(bx-0.30-fan, 0.45*H+0.48), V(bx-0.17, 0.42*H));
+    }
+  } else if(sh.dorsal > 0){
+    const d = 0.36*sh.dorsal;
+    const sway = Math.sin(tailPhase*0.9)*0.05;
+    const tip = V(-0.30 + sway, -0.52*H - d);
+    const mid = V(-0.12,-0.52*H);
+    tri(pal.finB, V(0.22,-0.45*H), tip, mid);
+    tri(pal.finA, mid, tip, V(-0.60,-0.26*H));
+  }
+
+  // anal fin
+  tri(pal.finA, V(-0.20, 0.44*H), V(-0.52, 0.44*H + 0.18), V(-0.62, 0.24*H));
+
+  // tail
+  const tb0 = V(-0.86,-0.10), tb1 = V(-0.86, 0.10);
+  const tipU = V(-1.60, -sh.tailU*sh.tail);
+  const tipL = V(-1.60,  sh.tailL*sh.tail);
+  const notch = V(-1.28, 0);
+  tri(pal.tailA, tb0, tipU, notch);
+  tri(pal.tailB, tb1, notch, tipL);
+  tri(pal.tailM, tb0, notch, tb1);
+
+  // ---- body: dark silhouette underlay (hides seams), then facets ----
+  poly(pal.sil, [N,T0,T1,T2,T3,B3,B2,B1,B0]);
+
+  tri(pal.topA, N,  T0, C1);
+  tri(pal.topB, T0, T1, C1);
+  tri(pal.topA, T1, C2, C1);
+  tri(pal.topB, T1, T2, C2);
+  tri(pal.topA, T2, C3, C2);
+  tri(pal.topB, T2, T3, C3);
+  tri(pal.topA, T3, P,  C3);
+
+  tri(pal.botA, N,  C1, B0);
+  tri(pal.botB, B0, C1, B1);
+  tri(pal.botA, B1, C1, C2);
+  tri(pal.botB, B1, C2, B2);
+  tri(pal.botA, B2, C2, C3);
+  tri(pal.botB, B2, C3, B3);
+  tri(pal.botA, B3, C3, P);
+
+  // ---- things in front of the body ----
+  if(sh.hammer){
+    poly(pal.topB, [V(0.56,-0.12), V(0.68,-0.62), V(0.97,-0.66), V(1.06,-0.06)]);
+    poly(pal.topA, [V(0.56, 0.12), V(0.68, 0.62), V(0.97, 0.66), V(1.06, 0.06)]);
+  }
+
+  // gill slit (a subtle face without an eye)
+  poly(pal.gill, [V(0.36,-0.34*H), V(0.43, 0.02), V(0.36, 0.28*H), V(0.29, 0.02)], 0.5);
+
+  // pectoral fin
+  const flap = Math.sin(tailPhase*1.2 + 1.4)*0.08;
+  tri(pal.finB, V(0.24, 0.10), V(-0.16, 0.42*H + 0.10 + flap), V(-0.10, 0.08));
+}
+
+/* ---- species colour / body-plan tables (used by fish-shaped creatures) ---- */
+const SHARK_COLORS      = { body:0x93a0ad, fin:0x7a8794, belly:0xe6ecf1, shape:{ h:0.82, dorsal:1.5, tailU:0.78, tailL:0.36 } };
+const HAMMER_COLORS     = { body:0x8a9aaa, fin:0x6f7f8f, belly:0xe0e7ee, shape:{ h:0.82, dorsal:1.5, tailU:0.78, tailL:0.36, hammer:true } };
+const GOBLIN_COLORS     = { body:0x9a8aaa, fin:0x85759a, belly:0xd6c8e4, billColor:0xe0a8b8, shape:{ h:0.85, dorsal:0.9, bill:0.7, billW:0.06 } };
+const WHALE_COLORS      = { body:0x4a6a8a, fin:0x3a5878, belly:0xa9c0d4, shape:{ h:1.1, dorsal:0.3, tail:0.85 } };
+const DOLPHIN_COLORS    = { body:0x7a8a9a, fin:0x66768a, belly:0xd5dee6, billColor:0x8a9aaa, shape:{ h:0.85, dorsal:0.9, bill:0.32, billW:0.10 } };
+const NARWHAL_COLORS    = { body:0xb8c8d8, fin:0x9fb0c2, belly:0xeef4f8, billColor:0xf3ead2, shape:{ h:0.95, dorsal:0, bill:1.1, billW:0.045 } };
+const MANATEE_COLORS    = { body:0x8a7a6a, fin:0x75665a, belly:0xa89a8a, shape:{ h:1.15, dorsal:0, tail:0.7 } };
+const SWORDFISH_COLORS  = { body:0x5a6a8a, fin:0x48587a, belly:0xc0cde0, billColor:0x9aaacb, shape:{ h:0.7, dorsal:1.2, bill:1.15, billW:0.04 } };
+const PARROTFISH_COLORS = { body:0x4ecdc4, fin:0x7fe8d4, belly:0xaaf5e8, shape:{ h:1.05 } };
+const LIONFISH_COLORS   = { body:0xff6b6b, fin:0xff9a8a, belly:0xffb8a8, shape:{ h:0.95, spines:6 } };
+
+function speedFrac(o, ref){ return clamp(Math.hypot(o.vx, o.vy)/ref, 0, 1); }
+
 /* ============================= PLAYER ============================= */
+
+const JUMP_POWER = 13;      // upward launch speed when pressing Space underwater
+const JUMP_COOLDOWN = 55;   // frames (~0.9s)
+const JUMP_BOOST_FRAMES = 22;
 
 const player = {
   x: 300, y: 900,
@@ -365,20 +537,41 @@ const player = {
   angle: 0, displayAngle: 0,
   tailPhase: 0,
   size: 20,
-  maxSpeed: 5.4,
-  accel: 0.34,
+  maxSpeed: 9.0,
+  accel: 0.55,
   drag: 0.94,
   bob: 0,
   bank: 0,
   inAir: false,
   flipping: false,
   flipProgress: 0,
-  flipDir: 1
+  flipDir: 1,
+  flipXP: 0,
+  flipCounts: true,
+  jumpCd: 0,
+  boost: 0,
+  chomp: 0
 };
-const PLAYER_COLORS = { body:0xff9d5c, fin:0xffd194, eye:0xfff4e6 };
+const PLAYER_COLORS = { body:0xff9d5c, fin:0xffd194, belly:0xffe2bd };
+
+function tryJump(){
+  if(!gameStarted || commandOpen) return;
+  if(player.y < SURFACE_Y) return;       // already airborne
+  if(player.jumpCd > 0) return;
+  player.vy = -JUMP_POWER;
+  player.boost = JUMP_BOOST_FRAMES;
+  player.jumpCd = JUMP_COOLDOWN;
+  burstBubbles(player.x, player.y + player.size*0.5, 10);
+  playBlip();
+  scheduleHideInstructions(8000);
+}
 
 function updatePlayer(dt){
   const wasUnderwater = player.y >= SURFACE_Y;
+
+  if(player.jumpCd > 0) player.jumpCd -= dt;
+  if(player.boost > 0) player.boost -= dt;
+  player.chomp *= Math.pow(0.85, dt);
 
   let ax = 0, ay = 0;
   if(gameStarted){
@@ -388,8 +581,9 @@ function updatePlayer(dt){
     if(keys.down) ay += player.accel;
   } else {
     const t = performance.now()*0.00006;
-    ax = Math.sin(t)*player.accel*0.35;
-    ay = Math.cos(t*0.7)*player.accel*0.22;
+    const idleAccel = 0.34;
+    ax = Math.sin(t)*idleAccel*0.35;
+    ay = Math.cos(t*0.7)*idleAccel*0.22;
   }
 
   if(ax !== 0 && ay !== 0){ ax *= 0.78; ay *= 0.78; }
@@ -407,12 +601,16 @@ function updatePlayer(dt){
   if(inAir){
     player.vx *= Math.pow(0.995, dt);
   } else {
+    // While a jump is charging out of the water, vertical drag is almost off
+    const vDrag = player.boost > 0 ? 0.985 : player.drag;
     player.vx *= Math.pow(player.drag, dt);
-    player.vy *= Math.pow(player.drag, dt);
+    player.vy *= Math.pow(vDrag, dt);
   }
 
   const rawSpeed = Math.hypot(player.vx, player.vy);
-  const maxS = inAir ? player.maxSpeed*1.8 : player.maxSpeed;
+  let maxS = player.maxSpeed;
+  if(inAir) maxS = player.maxSpeed*1.8;
+  else if(player.boost > 0) maxS = Math.max(maxS, JUMP_POWER*1.05);
   if(rawSpeed > maxS){
     const k = maxS / rawSpeed;
     player.vx *= k; player.vy *= k;
@@ -431,6 +629,9 @@ function updatePlayer(dt){
       player.flipping = true;
       player.flipProgress = 0;
       player.flipDir = player.vx >= 0 ? 1 : -1;
+      player.flipCounts = true;
+      // faster breach = bigger flip reward
+      player.flipXP = 10 + Math.round(clamp(-player.vy, 0, 16));
     }
   }
 
@@ -446,6 +647,8 @@ function updatePlayer(dt){
       player.flipProgress = 0;
       player.angle = Math.atan2(player.vy, player.vx);
       player.displayAngle = player.angle;
+      if(player.flipCounts) awardFlip(player.flipXP);
+      player.flipCounts = true;
     }
   }
 
@@ -453,12 +656,182 @@ function updatePlayer(dt){
   player.bank = clamp(angleDiff * 1.8, -1, 1);
 
   const moveFactor = 0.5 + Math.min(speed/player.maxSpeed, 1)*1.85;
-  player.tailPhase += 0.155*dt*moveFactor*6;
+  player.tailPhase += 0.155*dt*moveFactor*2.2;
   player.bob = inAir ? 0 : Math.sin(performance.now()*0.0025)*1.6;
   player.inAir = inAir;
 
   return speed;
 }
+
+/* ============================= PROGRESSION (XP / LEVELS) ============================= */
+
+const SAVE_KEY = 'mocean.progress.v1';
+const progress = { level: 1, xp: 0 };
+
+function xpNeeded(level){ return Math.floor(30 * Math.pow(level, 1.35)); }
+
+function applyLevelStats(){
+  // The fish grows a little with every level (capped)
+  player.size = 20 + Math.min(progress.level - 1, 15) * 0.8;
+}
+
+function saveProgress(){
+  try{ localStorage.setItem(SAVE_KEY, JSON.stringify(progress)); }catch(err){}
+}
+
+function loadProgress(){
+  try{
+    const raw = localStorage.getItem(SAVE_KEY);
+    if(!raw) return;
+    const d = JSON.parse(raw);
+    if(Number.isFinite(d.level) && d.level >= 1){
+      progress.level = Math.min(99, Math.floor(d.level));
+      progress.xp = clamp(Math.floor(d.xp || 0), 0, xpNeeded(progress.level) - 1);
+    }
+  }catch(err){}
+}
+
+const levelValEl = document.getElementById('levelVal');
+const xpTextEl = document.getElementById('xpText');
+const xpFillEl = document.getElementById('xpFill');
+const levelBannerEl = document.getElementById('levelup-banner');
+const levelBannerNumEl = document.getElementById('luLevel');
+
+function updateXPUI(){
+  const need = xpNeeded(progress.level);
+  levelValEl.textContent = progress.level;
+  xpTextEl.textContent = `${progress.xp} / ${need} XP`;
+  xpFillEl.style.width = (progress.xp / need * 100).toFixed(1) + '%';
+}
+
+function popText(text, cls){
+  const el = document.createElement('div');
+  el.className = 'xp-pop' + (cls ? ' ' + cls : '');
+  el.textContent = text;
+  el.style.left = (app.screen.width/2 + rand(-26,26)) + 'px';
+  el.style.top = (app.screen.height/2 - 46 - player.size) + 'px';
+  document.body.appendChild(el);
+  setTimeout(()=> el.remove(), 1200);
+}
+
+// Merge rapid-fire gains (e.g. swimming through a school) into one popup
+let popAcc = 0, popLabel = '', popTimer = null;
+function queueXPPop(amount, label){
+  popAcc += amount;
+  if(label) popLabel = label;
+  if(popTimer) return;
+  popTimer = setTimeout(()=>{
+    popText(`+${popAcc} XP` + (popLabel ? `  ${popLabel}` : ''), popLabel ? 'flip' : '');
+    popAcc = 0; popLabel = ''; popTimer = null;
+  }, 200);
+}
+
+function showLevelUp(){
+  levelBannerNumEl.textContent = progress.level;
+  levelBannerEl.classList.remove('show');
+  void levelBannerEl.offsetWidth;       // restart the animation
+  levelBannerEl.classList.add('show');
+  burstBubbles(player.x, player.y, 22);
+  playLevelUp();
+}
+
+function addXP(amount, label){
+  if(!(amount > 0)) return;
+  progress.xp += amount;
+  let leveled = false;
+  while(progress.xp >= xpNeeded(progress.level)){
+    progress.xp -= xpNeeded(progress.level);
+    progress.level++;
+    leveled = true;
+  }
+  if(leveled){ applyLevelStats(); showLevelUp(); }
+  queueXPPop(amount, label);
+  updateXPUI();
+  saveProgress();
+}
+
+function awardFlip(xp){ addXP(xp, 'Flip!'); }
+
+function resetProgress(){
+  progress.level = 1; progress.xp = 0;
+  applyLevelStats(); updateXPUI(); saveProgress();
+}
+
+/* ---- eating ---- */
+
+// Fish the player can eat, the XP they give, and the level needed to swallow them
+const EDIBLE = {
+  school:     { xp: 6,  minLevel: 1 },
+  parrotfish: { xp: 14, minLevel: 2 },
+  seahorse:   { xp: 12, minLevel: 2 },
+  lionfish:   { xp: 18, minLevel: 3 },
+  pufferfish: { xp: 22, minLevel: 3 },
+  blobfish:   { xp: 32, minLevel: 5 },
+  oarfish:    { xp: 45, minLevel: 7 },
+  swordfish:  { xp: 70, minLevel: 9 }
+};
+
+let lastTooBigMsg = 0;
+function tooBigMessage(minLevel){
+  const now = performance.now();
+  if(now - lastTooBigMsg < 1400) return;
+  lastTooBigMsg = now;
+  popText(`Need level ${minLevel}`, 'warn');
+}
+
+function eatenEffect(x, y, xp){
+  burstBubbles(x, y, 6);
+  player.chomp = 1;
+  hideHoverLabel();
+  playBlip();
+  addXP(xp);
+}
+
+function checkEating(){
+  if(!gameStarted || player.y < SURFACE_Y + 6) return;
+
+  const mouthX = player.x + Math.cos(player.displayAngle)*player.size*0.55;
+  const mouthY = player.y + Math.sin(player.displayAngle)*player.size*0.55;
+  const reach = player.size*0.85;
+
+  // schools of small fish (each member is eaten individually)
+  const school = EDIBLE.school;
+  for(let si = schools.length - 1; si >= 0; si--){
+    const sc = schools[si];
+    const roughR = reach + 70;
+    if(dist2(sc.x, sc.y, mouthX, mouthY) > roughR*roughR) continue;
+    for(let mi = sc.members.length - 1; mi >= 0; mi--){
+      const m = sc.members[mi];
+      const rr = reach + m.size*0.8;
+      if(dist2(m.g.x, m.g.y, mouthX, mouthY) < rr*rr){
+        if(progress.level < school.minLevel){ tooBigMessage(school.minLevel); continue; }
+        eatenEffect(m.g.x, m.g.y, school.xp);
+        creaturesLayer.removeChild(m.g);
+        m.g.destroy();
+        sc.members.splice(mi, 1);
+      }
+    }
+    if(sc.members.length === 0) schools.splice(si, 1);
+  }
+
+  // individual fish
+  for(let i = npcs.length - 1; i >= 0; i--){
+    const n = npcs[i];
+    const def = EDIBLE[n.type];
+    if(!def) continue;
+    const rr = reach + n.size*0.7;
+    if(dist2(n.x, n.y, mouthX, mouthY) < rr*rr){
+      if(progress.level < def.minLevel){ tooBigMessage(def.minLevel); continue; }
+      eatenEffect(n.x, n.y, def.xp);
+      destroyNpc(n);
+      npcs.splice(i, 1);
+    }
+  }
+}
+
+loadProgress();
+applyLevelStats();
+updateXPUI();
 
 /* ============================= BUBBLES ============================= */
 
@@ -510,6 +883,20 @@ function spawnSplash(x, y){
   }
 }
 
+function burstBubbles(x, y, count){
+  for(let i=0;i<count;i++){
+    bubbles.push({
+      x: x + rand(-14,14),
+      y: y + rand(-10,10),
+      r: rand(1.2,3.6),
+      speed: rand(0.8,2.2),
+      wobble: rand(0,Math.PI*2),
+      bright: true
+    });
+  }
+  if(bubbles.length > 200) bubbles.splice(0, bubbles.length - 200);
+}
+
 function updateSplashes(dt){
   for(const sp of splashes) sp.t += dt;
   splashes = splashes.filter(sp => sp.t < sp.life);
@@ -529,12 +916,12 @@ function redrawSplashes(){
 
 const schools = [];
 const SCHOOL_PALETTES = [
-  {name:'Green Chromis', body:0x7fe8d4, fin:0xbdfff0, eye:0x08332b},
-  {name:'Yellow Tang', body:0xffd45e, fin:0xfff0bd, eye:0x3a2c00},
-  {name:'Blue Cardinalfish', body:0x9ec8ff, fin:0xdceaff, eye:0x0b2347},
-  {name:'Pink Anthias', body:0xff8fa3, fin:0xffd6df, eye:0x3a0a16},
-  {name:'Angelfish', body:0xffe566, fin:0xffeb99, eye:0x664d00},
-  {name:'Clownfish', body:0xff6b35, fin:0xffa366, eye:0x331a00}
+  {name:'Green Chromis', body:0x7fe8d4, fin:0xbdfff0},
+  {name:'Yellow Tang', body:0xffd45e, fin:0xfff0bd},
+  {name:'Blue Cardinalfish', body:0x9ec8ff, fin:0xdceaff},
+  {name:'Pink Anthias', body:0xff8fa3, fin:0xffd6df},
+  {name:'Angelfish', body:0xffe566, fin:0xffeb99},
+  {name:'Clownfish', body:0xff6b35, fin:0xffa366}
 ];
 
 function spawnSchool(x,y){
@@ -774,8 +1161,6 @@ function redrawTurtle(t){
 
 /* ============================= SHARKS ============================= */
 
-const SHARK_COLORS = { body:0x9aa6b2, fin:0xcfd8e0, eye:0x10151a };
-
 function spawnShark(x,y){
   const g = new PIXI.Graphics();
   creaturesLayer.addChild(g);
@@ -885,9 +1270,6 @@ function redrawOctopus(o){
   g.lineStyle({ width: Math.max(1.6, s*0.09), color: o.color, ...ROUND });
   g.drawEllipse(0, 0, s*squish, s*0.85);
 
-  g.lineStyle(1.2, 0x1a0a1f);
-  g.drawCircle(s*0.3, -s*0.25, Math.max(1, s*0.08));
-  g.drawCircle(s*0.3, s*0.25, Math.max(1, s*0.08));
 }
 
 /* ============================= SEAHORSE ============================= */
@@ -939,8 +1321,6 @@ function redrawSeahorse(h){
   g.moveTo(-s*0.15, -s*0.1+bob);
   g.lineTo(-s*0.4+finWag*s*0.2, s*0.05+bob);
 
-  g.lineStyle(1.2, 0x1a0a1f);
-  g.drawCircle(s*0.3, -s*1.0+bob, Math.max(1, s*0.07));
 }
 
 /* ============================= STINGRAY ============================= */
@@ -999,9 +1379,6 @@ function redrawStingray(r){
   g.moveTo(-s*0.5, 0);
   g.lineTo(-s*1.6, Math.sin(r.wingPhase*1.5)*s*0.2);
 
-  g.lineStyle(1.2, 0x10131f);
-  g.drawCircle(s*0.45, -s*0.1, Math.max(1, s*0.05));
-  g.drawCircle(s*0.45, s*0.1, Math.max(1, s*0.05));
 }
 
 /* ============================= MORAY EEL ============================= */
@@ -1053,8 +1430,6 @@ function redrawEel(e){
     g.lineTo(nx, ny);
   }
 
-  g.lineStyle(1.2, 0x111a0d);
-  g.drawCircle(s*1.05, 0, Math.max(1, s*0.07));
 }
 
 /* ============================= STARFISH ============================= */
@@ -1192,8 +1567,6 @@ function redrawPufferfish(p){
     g.lineTo(Math.cos(ang)*s*puff*1.3, Math.sin(ang)*s*puff*1.3);
   }
 
-  g.lineStyle(1.2, 0x1a0a1f);
-  g.drawCircle(s*0.4, -s*0.2, Math.max(1, s*0.06));
 }
 
 /* ============================= NEW CREATURES ============================= */
@@ -1252,9 +1625,6 @@ function redrawMantaRay(m){
   g.moveTo(-s*0.3, 0);
   g.lineTo(-s*1.0, Math.sin(m.wingPhase*1.3)*s*0.15);
 
-  g.lineStyle(1.2, 0x10131f);
-  g.drawCircle(s*0.15, -s*0.08, Math.max(1, s*0.04));
-  g.drawCircle(s*0.15, s*0.08, Math.max(1, s*0.04));
 }
 
 /* ---- SQUID ---- */
@@ -1319,9 +1689,6 @@ function redrawSquid(sq){
     }
   }
 
-  g.lineStyle(1.2, 0x1a0a1f);
-  g.drawCircle(s*0.2, -s*0.35, Math.max(1, s*0.06));
-  g.drawCircle(-s*0.2, -s*0.35, Math.max(1, s*0.06));
 }
 
 /* ---- ANGLERFISH ---- */
@@ -1381,8 +1748,6 @@ function redrawAnglerfish(a){
   g.lineStyle(1.2, 0x88ff44, 0.5);
   g.drawCircle(s*0.4, -s*1.5, Math.max(3, s*0.18));
 
-  g.lineStyle(2, 0x1a0a0f);
-  g.drawCircle(s*0.5, -s*0.15, Math.max(1.5, s*0.08));
 }
 
 /* ---- NARWHAL ---- */
@@ -1424,27 +1789,7 @@ function updateNarwhal(n, dt){
 }
 
 function redrawNarwhal(n){
-  const g = n.g;
-  g.clear();
-  const s = n.size;
-
-  g.lineStyle({ width: Math.max(2, s*0.08), color: 0xc8d8e8, ...ROUND });
-  g.drawEllipse(0, 0, s*0.9, s*0.55);
-
-  g.lineStyle({ width: Math.max(1.5, s*0.06), color: 0xa8b8c8, ...ROUND });
-  g.moveTo(s*0.7, -s*0.1);
-  g.lineTo(s*1.8, -s*0.25);
-  g.lineTo(s*1.85, -s*0.15);
-  g.lineTo(s*0.75, s*0.05);
-
-  const tailWag = Math.sin(n.tailPhase)*s*0.15;
-  g.moveTo(-s*0.8, 0);
-  g.lineTo(-s*1.4, -s*0.25 + tailWag);
-  g.lineTo(-s*1.5, s*0.05 + tailWag);
-  g.lineTo(-s*0.85, s*0.15);
-
-  g.lineStyle(1.5, 0x1a0a0f);
-  g.drawCircle(s*0.4, -s*0.1, Math.max(1.5, s*0.06));
+  drawFishShape(n.g, n.size, NARWHAL_COLORS, n.tailPhase, speedFrac(n,1.4), 0);
 }
 
 /* ---- HAMMERHEAD SHARK ---- */
@@ -1486,33 +1831,7 @@ function updateHammerhead(h, dt){
 }
 
 function redrawHammerhead(h){
-  const g = h.g;
-  g.clear();
-  const s = h.size;
-
-  g.lineStyle({ width: Math.max(2, s*0.08), color: 0x8a9aaa, ...ROUND });
-  g.drawEllipse(0, 0, s*0.85, s*0.5);
-
-  g.lineStyle({ width: Math.max(1.5, s*0.06), color: 0x8a9aaa, ...ROUND });
-  g.moveTo(s*0.5, -s*0.2);
-  g.lineTo(s*0.6, -s*0.55);
-  g.lineTo(s*0.4, -s*0.6);
-  g.lineTo(s*0.3, -s*0.25);
-
-  g.moveTo(s*0.5, s*0.2);
-  g.lineTo(s*0.6, s*0.55);
-  g.lineTo(s*0.4, s*0.6);
-  g.lineTo(s*0.3, s*0.25);
-
-  const tailWag = Math.sin(h.tailPhase)*s*0.12;
-  g.moveTo(-s*0.7, 0);
-  g.lineTo(-s*1.3, -s*0.2 + tailWag);
-  g.lineTo(-s*1.4, s*0.1 + tailWag);
-  g.lineTo(-s*0.75, s*0.15);
-
-  g.lineStyle(1.5, 0x1a0a0f);
-  g.drawCircle(s*0.35, -s*0.35, Math.max(1.5, s*0.05));
-  g.drawCircle(s*0.35, s*0.35, Math.max(1.5, s*0.05));
+  drawFishShape(h.g, h.size, HAMMER_COLORS, h.tailPhase, speedFrac(h,1.6), 0);
 }
 
 /* ---- GIANT ISOPOD ---- */
@@ -1557,9 +1876,6 @@ function redrawIsopod(i){
     g.lineTo(sx + Math.sin(i.walkPhase + seg + Math.PI)*s*0.15, s*0.9);
   }
 
-  g.lineStyle(1.2, 0x1a0a0f);
-  g.drawCircle(s*0.3, -s*0.1, Math.max(1, s*0.06));
-  g.drawCircle(s*0.3, s*0.1, Math.max(1, s*0.06));
 }
 
 /* ---- LIONFISH ---- */
@@ -1601,25 +1917,7 @@ function updateLionfish(lf, dt){
 }
 
 function redrawLionfish(lf){
-  const g = lf.g;
-  g.clear();
-  const s = lf.size;
-
-  g.lineStyle({ width: Math.max(1.6, s*0.12), color: 0xff6b6b, ...ROUND });
-  g.drawEllipse(0, 0, s*0.8, s*0.5);
-
-  for(let i=0;i<6;i++){
-    const fy = lerp(-s*0.4, s*0.4, i/5);
-    const fan = Math.sin(lf.finPhase + i*0.8)*s*0.25;
-    g.lineStyle({ width: Math.max(0.8, s*0.06), color: 0xff8f8f, alpha:0.8 });
-    g.moveTo(-s*0.3, fy);
-    g.lineTo(-s*0.8, fy - s*0.4 + fan);
-    g.lineTo(-s*0.5, fy - s*0.6 + fan);
-    g.lineTo(-s*0.1, fy - s*0.1);
-  }
-
-  g.lineStyle(1.2, 0x1a0a0f);
-  g.drawCircle(s*0.35, -s*0.08, Math.max(1, s*0.06));
+  drawFishShape(lf.g, lf.size, LIONFISH_COLORS, lf.finPhase, speedFrac(lf,0.6), 0);
 }
 
 /* ---- CUTTLEFISH ---- */
@@ -1680,9 +1978,6 @@ function redrawCuttlefish(c){
     g.lineTo(tx + Math.sin(c.finPhase + i)*s*0.15, s*0.8);
   }
 
-  g.lineStyle(1.2, 0x1a0a0f);
-  g.drawCircle(s*0.3, -s*0.08, Math.max(1, s*0.06));
-  g.drawCircle(s*0.3, s*0.08, Math.max(1, s*0.06));
 }
 
 /* ---- PARROTFISH ---- */
@@ -1725,26 +2020,7 @@ function updateParrotfish(pf, dt){
 }
 
 function redrawParrotfish(pf){
-  const g = pf.g;
-  g.clear();
-  const s = pf.size;
-
-  g.lineStyle({ width: Math.max(1.6, s*0.1), color: pf.color, ...ROUND });
-  g.drawEllipse(0, 0, s*0.9, s*0.5);
-
-  g.lineStyle({ width: Math.max(1.2, s*0.07), color: 0x7fe8d4, ...ROUND });
-  g.moveTo(s*0.5, -s*0.15);
-  g.lineTo(s*0.9, -s*0.35);
-  g.lineTo(s*0.85, -s*0.05);
-
-  const tailWag = Math.sin(pf.tailPhase)*s*0.2;
-  g.moveTo(-s*0.7, 0);
-  g.lineTo(-s*1.2, -s*0.25 + tailWag);
-  g.lineTo(-s*1.3, s*0.05 + tailWag);
-  g.lineTo(-s*0.75, s*0.15);
-
-  g.lineStyle(1.2, 0x1a0a0f);
-  g.drawCircle(s*0.4, -s*0.08, Math.max(1, s*0.06));
+  drawFishShape(pf.g, pf.size, PARROTFISH_COLORS, pf.tailPhase, speedFrac(pf,1.0), 0);
 }
 
 /* ---- BLOBFISH ---- */
@@ -1799,9 +2075,6 @@ function redrawBlobfish(b){
   g.lineTo(s*0.5, -s*0.8);
   g.lineTo(s*0.1, -s*0.6);
 
-  g.lineStyle(1.2, 0x1a0a0f);
-  g.drawCircle(s*0.15, -s*0.15, Math.max(1, s*0.05));
-  g.drawCircle(-s*0.15, -s*0.15, Math.max(1, s*0.05));
 
   g.lineStyle(1, 0xff9090);
   g.moveTo(-s*0.1, s*0.1);
@@ -1861,8 +2134,6 @@ function redrawSeaDragon(sd){
     g.lineTo(-s*0.1, fy - s*0.1);
   }
 
-  g.lineStyle(1.2, 0x1a0a0f);
-  g.drawCircle(s*0.1, -s*0.25, Math.max(1, s*0.05));
 }
 
 /* ---- WHALE ---- */
@@ -1906,33 +2177,7 @@ function updateWhale(w, dt){
 }
 
 function redrawWhale(w){
-  const g = w.g;
-  g.clear();
-  const s = w.size;
-
-  g.lineStyle({ width: Math.max(2.5, s*0.06), color: 0x4a6a8a, ...ROUND });
-  g.drawEllipse(0, 0, s, s*0.55);
-
-  g.lineStyle({ width: Math.max(1.5, s*0.04), color: 0x5a7a9a, ...ROUND });
-  g.moveTo(s*0.6, -s*0.35);
-  g.quadraticCurveTo(s*0.8, -s*0.6, s*0.4, -s*0.5);
-
-  const tailWag = Math.sin(w.tailPhase)*s*0.2;
-  g.moveTo(-s*0.9, 0);
-  g.lineTo(-s*1.5, -s*0.35 + tailWag);
-  g.lineTo(-s*1.6, s*0.1 + tailWag);
-  g.lineTo(-s*0.95, s*0.2);
-
-  g.lineStyle({ width: Math.max(1.5, s*0.04), color: 0x5a7a9a, ...ROUND });
-  g.moveTo(s*0.3, -s*0.15);
-  g.lineTo(s*0.5, -s*0.45);
-  g.lineTo(s*0.35, -s*0.35);
-  g.moveTo(s*0.3, s*0.15);
-  g.lineTo(s*0.5, s*0.45);
-  g.lineTo(s*0.35, s*0.35);
-
-  g.lineStyle(1.5, 0x1a0a0f);
-  g.drawCircle(s*0.5, -s*0.08, Math.max(1.5, s*0.04));
+  drawFishShape(w.g, w.size, WHALE_COLORS, w.tailPhase, speedFrac(w,0.6), 0);
 }
 
 /* ---- DOLPHIN ---- */
@@ -1976,26 +2221,7 @@ function updateDolphin(d, dt){
 }
 
 function redrawDolphin(d){
-  const g = d.g;
-  g.clear();
-  const s = d.size;
-
-  g.lineStyle({ width: Math.max(1.8, s*0.1), color: 0x7a8a9a, ...ROUND });
-  g.drawEllipse(0, 0, s*0.9, s*0.45);
-
-  g.lineStyle({ width: Math.max(1.2, s*0.06), color: 0x8a9aaa, ...ROUND });
-  g.moveTo(s*0.4, -s*0.1);
-  g.lineTo(s*0.65, -s*0.45);
-  g.lineTo(s*0.5, -s*0.35);
-
-  const tailWag = Math.sin(d.tailPhase)*s*0.2;
-  g.moveTo(-s*0.75, 0);
-  g.lineTo(-s*1.3, -s*0.3 + tailWag);
-  g.lineTo(-s*1.4, s*0.08 + tailWag);
-  g.lineTo(-s*0.8, s*0.15);
-
-  g.lineStyle(1.2, 0x1a0a0f);
-  g.drawCircle(s*0.4, -s*0.06, Math.max(1, s*0.05));
+  drawFishShape(d.g, d.size, DOLPHIN_COLORS, d.tailPhase, speedFrac(d,1.6), 0);
 }
 
 /* ---- SWORDFISH ---- */
@@ -2037,27 +2263,7 @@ function updateSwordfish(sf, dt){
 }
 
 function redrawSwordfish(sf){
-  const g = sf.g;
-  g.clear();
-  const s = sf.size;
-
-  g.lineStyle({ width: Math.max(2, s*0.08), color: 0x5a6a8a, ...ROUND });
-  g.drawEllipse(0, 0, s*0.85, s*0.4);
-
-  g.lineStyle({ width: Math.max(1.5, s*0.05), color: 0x7a8aaa, ...ROUND });
-  g.moveTo(s*0.6, -s*0.05);
-  g.lineTo(s*2.0, -s*0.02);
-  g.lineTo(s*2.05, s*0.02);
-  g.lineTo(s*0.6, s*0.05);
-
-  const tailWag = Math.sin(sf.tailPhase)*s*0.18;
-  g.moveTo(-s*0.7, 0);
-  g.lineTo(-s*1.3, -s*0.25 + tailWag);
-  g.lineTo(-s*1.4, s*0.08 + tailWag);
-  g.lineTo(-s*0.75, s*0.12);
-
-  g.lineStyle(1.2, 0x1a0a0f);
-  g.drawCircle(s*0.35, -s*0.06, Math.max(1, s*0.05));
+  drawFishShape(sf.g, sf.size, SWORDFISH_COLORS, sf.tailPhase, speedFrac(sf,2.2), 0);
 }
 
 /* ---- NAUTILUS ---- */
@@ -2118,8 +2324,6 @@ function redrawNautilus(n){
   g.lineTo(-s*0.6, s*0.1 + tentSway);
   g.lineTo(-s*0.35, s*0.05);
 
-  g.lineStyle(1.2, 0x1a0a0f);
-  g.drawCircle(s*0.25, -s*0.08, Math.max(1, s*0.05));
 }
 
 /* ---- SEA SNAKE ---- */
@@ -2179,8 +2383,6 @@ function redrawSeaSnake(sn){
     g.lineTo(bx + s*0.15, by - s*0.25);
   }
 
-  g.lineStyle(1.2, 0x1a0a0f);
-  g.drawCircle(s*1.1, Math.sin(sn.phase + 7*0.9)*s*0.25, Math.max(1, s*0.05));
 }
 
 /* ---- SUNFISH ---- */
@@ -2243,8 +2445,6 @@ function redrawSunfish(sf){
   g.lineTo(s*0.3, 0);
   g.lineTo(-s*0.3, s*0.3);
 
-  g.lineStyle(1.5, 0x1a0a0f);
-  g.drawCircle(s*0.2, -s*0.15, Math.max(1.5, s*0.04));
 }
 
 /* ---- DUMBO OCTOPUS ---- */
@@ -2305,9 +2505,6 @@ function redrawDumboOctopus(do_){
     g.lineTo(tx + Math.sin(do_.earPhase + i)*s*0.1, s*0.7);
   }
 
-  g.lineStyle(1.2, 0x1a0a0f);
-  g.drawCircle(s*0.15, -s*0.08, Math.max(1, s*0.05));
-  g.drawCircle(-s*0.15, -s*0.08, Math.max(1, s*0.05));
 }
 
 /* ---- GOBLIN SHARK ---- */
@@ -2349,28 +2546,7 @@ function updateGoblinShark(gs, dt){
 }
 
 function redrawGoblinShark(gs){
-  const g = gs.g;
-  g.clear();
-  const s = gs.size;
-  const jawOpen = Math.sin(gs.jawPhase)*s*0.15;
-
-  g.lineStyle({ width: Math.max(2, s*0.08), color: 0x9a8aaa, ...ROUND });
-  g.drawEllipse(0, 0, s*0.85, s*0.45);
-
-  g.lineStyle({ width: Math.max(1.5, s*0.06), color: 0xbaaaca, ...ROUND });
-  g.moveTo(s*0.5, -s*0.1);
-  g.lineTo(s*1.6, -s*0.05 + jawOpen*0.3);
-  g.lineTo(s*1.65, s*0.02 + jawOpen*0.3);
-  g.lineTo(s*0.5, s*0.1);
-
-  const tailWag = Math.sin(gs.jawPhase*0.8)*s*0.15;
-  g.moveTo(-s*0.7, 0);
-  g.lineTo(-s*1.3, -s*0.2 + tailWag);
-  g.lineTo(-s*1.4, s*0.08 + tailWag);
-  g.lineTo(-s*0.75, s*0.12);
-
-  g.lineStyle(1.2, 0x1a0a0f);
-  g.drawCircle(s*0.3, -s*0.06, Math.max(1, s*0.05));
+  drawFishShape(gs.g, gs.size, GOBLIN_COLORS, gs.jawPhase*2.2, speedFrac(gs,1.0), 0);
 }
 
 /* ---- OARFISH ---- */
@@ -2432,8 +2608,6 @@ function redrawOarfish(o){
   g.lineTo(-crestSway*0.3, -s*0.9);
   g.lineTo(0, -s*0.5);
 
-  g.lineStyle(1.2, 0x1a0a0f);
-  g.drawCircle(s*0.1, -s*0.2, Math.max(1, s*0.05));
 }
 
 /* ---- MANATEE ---- */
@@ -2475,25 +2649,7 @@ function updateManatee(m, dt){
 }
 
 function redrawManatee(m){
-  const g = m.g;
-  g.clear();
-  const s = m.size;
-
-  g.lineStyle({ width: Math.max(2, s*0.08), color: 0x8a7a6a, ...ROUND });
-  g.drawEllipse(0, 0, s, s*0.55);
-
-  g.lineStyle({ width: Math.max(1.5, s*0.06), color: 0x7a6a5a, ...ROUND });
-  g.moveTo(s*0.3, -s*0.35);
-  g.quadraticCurveTo(s*0.5, -s*0.6, s*0.2, -s*0.5);
-
-  const tailWag = Math.sin(m.tailPhase)*s*0.2;
-  g.moveTo(-s*0.8, 0);
-  g.lineTo(-s*1.4, -s*0.3 + tailWag);
-  g.lineTo(-s*1.5, s*0.1 + tailWag);
-  g.lineTo(-s*0.85, s*0.2);
-
-  g.lineStyle(1.5, 0x1a0a0f);
-  g.drawCircle(s*0.5, -s*0.08, Math.max(1.5, s*0.05));
+  drawFishShape(m.g, m.size, MANATEE_COLORS, m.tailPhase, speedFrac(m,0.7), 0);
 }
 
 /* ============================= NPC MANAGER ============================= */
@@ -2770,28 +2926,31 @@ function drawWaterOverlay(time){
   waterOverlayG.clear();
   const W = app.screen.width;
   const H = app.screen.height;
+  const surfY = world.y;          // where the surface sits on screen
+  if(surfY > H) return;           // surface is below the view: nothing to light
+  const top = Math.max(0, surfY);
 
-  // Caustic light patterns on the water surface
+  // Caustic light patterns just under the surface
   if(player.y < 800){
-    const causticAlpha = Math.max(0, 0.08 - player.y/10000);
+    const causticAlpha = Math.max(0, 0.08 - Math.max(player.y,0)/10000);
     waterOverlayG.lineStyle(1, 0xffffff, causticAlpha);
     for(let i=0; i<12; i++){
       const cx = ((i*120 + time*0.02 + player.x*0.1) % (W+200)) - 100;
-      const cy = 20 + Math.sin(time*0.001 + i)*30;
+      const cy = top + 20 + Math.sin(time*0.001 + i)*30;
       waterOverlayG.moveTo(cx, cy);
       waterOverlayG.quadraticCurveTo(cx+40, cy+20, cx+80, cy-10);
       waterOverlayG.quadraticCurveTo(cx+120, cy-30, cx+160, cy+10);
     }
   }
 
-  // Subtle light rays from surface
+  // Subtle light rays from the surface
   if(player.y < 400){
-    const rayAlpha = Math.max(0, 0.04 - player.y/8000);
+    const rayAlpha = Math.max(0, 0.035 - Math.max(player.y,0)/8000) * (0.4 + 0.6*getDaylight(time));
     waterOverlayG.beginFill(0xffffff, rayAlpha);
     for(let i=0; i<5; i++){
       const rx = ((i*200 + time*0.008) % (W+300)) - 150;
-      waterOverlayG.moveTo(rx, 0);
-      waterOverlayG.lineTo(rx+30, 0);
+      waterOverlayG.moveTo(rx, top);
+      waterOverlayG.lineTo(rx+30, top);
       waterOverlayG.lineTo(rx+80, H);
       waterOverlayG.lineTo(rx+20, H);
       waterOverlayG.closePath();
@@ -2800,25 +2959,92 @@ function drawWaterOverlay(time){
   }
 }
 
-/* ============================= WATER BACKGROUND (CSS) ============================= */
+/* ============================= SKY + WATER BACKGROUND ============================= */
 
 const waterBg = document.getElementById('water-bg');
-function updateWaterBackground(){
+
+// Sky is drawn in PIXI (so its lower edge can follow the wave line);
+// everything below the surface is a CSS gradient that darkens with depth.
+function drawSky(now){
+  skyG.clear();
+  const W = app.screen.width, H = app.screen.height;
+  const surfY = world.y;
+  if(surfY <= 0) return;                       // surface is above the screen: no sky visible
+
+  const day = getDaylight(now);
+  const br = options.brightness;
+  // night -> dawn/dusk -> day
+  let zenith, horizon;
+  if(day < 0.5){
+    const t = day/0.5;
+    zenith  = lerpColor(SKY_NIGHT_TOP, SKY_DUSK_TOP, t);
+    horizon = lerpColor(SKY_NIGHT_HOR, SKY_DUSK_HOR, t);
+  } else {
+    const t = (day - 0.5)/0.5;
+    zenith  = lerpColor(SKY_DUSK_TOP, SKY_DAY_TOP, t);
+    horizon = lerpColor(SKY_DUSK_HOR, SKY_DAY_HOR, t);
+  }
+
+  const scale = (c)=> rgbToHex([clamp(Math.round(c[0]*br),0,255), clamp(Math.round(c[1]*br),0,255), clamp(Math.round(c[2]*br),0,255)]);
+
+  const cut = clamp(surfY - 8, 0, H);
+  const BAND = 16;
+  for(let y=0; y<cut; y+=BAND){
+    const alt = clamp((surfY - (y + BAND/2)) / SKY_HEIGHT, 0, 1);
+    skyG.beginFill(scale(lerpColor(horizon, zenith, Math.pow(alt, 0.75))));
+    skyG.drawRect(0, y, W, Math.min(BAND, cut - y) + 1);
+    skyG.endFill();
+  }
+
+  // stars at night
+  if(day < 0.4 && cut > 0){
+    const a = (0.4 - day)/0.4;
+    for(let i=0;i<44;i++){
+      const tw = 0.55 + 0.45*Math.sin(now*0.002 + i*1.7);
+      skyG.beginFill(0xffffff, a*tw*0.85);
+      skyG.drawCircle(hash(i*1.3)*W, hash(i*2.7+5)*cut, 0.6 + hash(i*4.1)*1.1);
+      skyG.endFill();
+    }
+  }
+
+  // last strip: follow the wavy surface line exactly
+  if(cut < H){
+    const left = player.x - W/2;
+    const pts = [0, cut, W, cut];
+    const steps = Math.ceil(W/16);
+    for(let i=0; i<=steps; i++){
+      const sx = W - W*(i/steps);
+      const wy = surfY + Math.sin((left + sx)*0.02 + now*0.002)*4;
+      pts.push(sx, Math.min(H+2, Math.max(cut, wy)));
+    }
+    skyG.beginFill(scale(horizon));
+    skyG.drawPolygon(pts);
+    skyG.endFill();
+  }
+}
+
+function updateWaterBackground(now){
   const H = app.screen.height;
-  const topFrac = clamp((player.y - H/2) / 8000, 0, 1);
-  const botFrac = clamp((player.y + H/2) / 8000, 0, 1);
-  const c1 = colorAtDepthFraction(topFrac);
-  const c2 = colorAtDepthFraction(botFrac);
+  const surfY = world.y;
+  const startY = Math.max(0, surfY);            // first screen row that is water
 
-  const cycleTime = getCycleTime(performance.now());
-  let brightness = cycleTime < 0.5 ? (1 - cycleTime*2) : (cycleTime*2 - 1);
-  brightness = 0.5 + brightness*0.5;
-  brightness *= options.brightness;
+  const day = getDaylight(now);
+  const br = (0.42 + 0.58*day) * options.brightness;
 
-  const adjustedC1 = [Math.round(c1[0]*brightness), Math.round(c1[1]*brightness), Math.round(c1[2]*brightness)];
-  const adjustedC2 = [Math.round(c2[0]*brightness), Math.round(c2[1]*brightness), Math.round(c2[2]*brightness)];
+  const stops = [];
+  let firstColor = null;
+  const N = 4;
+  for(let i=0;i<=N;i++){
+    const sy = startY + (H - startY)*(i/N);
+    const depthFrac = clamp((player.y + (sy - H/2)) / 8000, 0, 1);
+    const c = colorAtDepthFraction(depthFrac);
+    const adj = [clamp(Math.round(c[0]*br),0,255), clamp(Math.round(c[1]*br),0,255), clamp(Math.round(c[2]*br),0,255)];
+    if(i === 0) firstColor = rgbToCss(adj);
+    stops.push(`${rgbToCss(adj)} ${sy.toFixed(1)}px`);
+  }
+  if(startY > 0) stops.unshift(`${firstColor} 0px`);   // solid water colour behind the sky strip
 
-  waterBg.style.background = `linear-gradient(to bottom, ${rgbToCss(adjustedC1)} 0%, ${rgbToCss(adjustedC2)} 100%)`;
+  waterBg.style.background = `linear-gradient(to bottom, ${stops.join(', ')})`;
 }
 
 /* ============================= DAY/NIGHT CLOCK ============================= */
@@ -2893,6 +3119,23 @@ function playBlip(){
   g.gain.exponentialRampToValueAtTime(0.0001, t+0.18);
   osc.connect(g); g.connect(masterGain);
   osc.start(t); osc.stop(t+0.2);
+}
+
+function playLevelUp(){
+  if(!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  [523.25, 659.25, 783.99, 1046.5].forEach((f, i)=>{
+    const t = t0 + i*0.09;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(f, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.2, t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+0.28);
+    osc.connect(g); g.connect(masterGain);
+    osc.start(t); osc.stop(t+0.3);
+  });
 }
 
 function setVolume(v){
@@ -3026,7 +3269,8 @@ commandInputEl.addEventListener('keydown', (e)=>{
 
 const COMMAND_LIST = [
   'help','clear','depth','teleport','tp','speed','spawn','clearcreatures',
-  'time','weather','flip','coords','fact','8ball','roll','coinflip','rename'
+  'time','weather','flip','coords','fact','8ball','roll','coinflip','rename',
+  'level','xp','resetprogress'
 ];
 
 const FUN_FACTS = [
@@ -3126,7 +3370,7 @@ function runCommand(raw){
     }
     case 'speed': {
       const v = parseFloat(args[0]);
-      if(isNaN(v) || v<=0){ printLine('Usage: /speed <number, e.g. 5.4>', 'err'); break; }
+      if(isNaN(v) || v<=0){ printLine('Usage: /speed <number, e.g. 9>', 'err'); break; }
       player.maxSpeed = clamp(v, 1, 40);
       printLine(`Max speed set to ${player.maxSpeed}.`, 'ok');
       break;
@@ -3154,8 +3398,7 @@ function runCommand(raw){
       break;
     }
     case 'time': {
-      const cycleTime = getCycleTime(performance.now());
-      printLine(cycleTime < 0.5 ? 'It is currently day.' : 'It is currently night.', 'info');
+      printLine(getDaylight(performance.now()) >= 0.5 ? 'It is currently day.' : 'It is currently night.', 'info');
       break;
     }
     case 'weather': {
@@ -3167,6 +3410,7 @@ function runCommand(raw){
       player.flipping = true;
       player.flipProgress = 0;
       player.flipDir = Math.random()<0.5 ? 1 : -1;
+      player.flipCounts = false;      // debug flips don't award XP
       printLine('Flip!', 'fun');
       break;
     }
@@ -3186,6 +3430,22 @@ function runCommand(raw){
     }
     case 'coinflip': {
       printLine(Math.random()<0.5 ? 'Heads!' : 'Tails!', 'fun');
+      break;
+    }
+    case 'level': {
+      printLine(`Level ${progress.level} - ${progress.xp} / ${xpNeeded(progress.level)} XP`, 'ok');
+      break;
+    }
+    case 'xp': {
+      const v = parseInt(args[0]);
+      if(isNaN(v) || v <= 0){ printLine('Usage: /xp <amount>', 'err'); break; }
+      addXP(v);
+      printLine(`Gave ${v} XP.`, 'ok');
+      break;
+    }
+    case 'resetprogress': {
+      resetProgress();
+      printLine('Level and XP reset.', 'ok');
       break;
     }
     case 'rename': {
@@ -3257,6 +3517,7 @@ app.ticker.add((dt)=>{
   const speed = updatePlayer(dt);
   updateNPCs(dt);
   trySpawn(dt);
+  checkEating();
 
   bubbleSpawnTimer -= dt;
   if(bubbleSpawnTimer <= 0){
@@ -3278,12 +3539,13 @@ app.ticker.add((dt)=>{
   drawWaterOverlay(now);
 
   playerG.y = app.screen.height/2 + player.bob;
-  drawFishShape(playerG, player.size, PLAYER_COLORS, player.tailPhase, speed/player.maxSpeed, player.bank);
   playerG.rotation = player.flipping
     ? player.displayAngle + player.flipProgress*Math.PI*2*player.flipDir
     : player.displayAngle;
+  drawFishShape(playerG, player.size*(1 + player.chomp*0.18), PLAYER_COLORS, player.tailPhase, speed/player.maxSpeed, player.bank, player.displayAngle);
 
-  updateWaterBackground();
+  drawSky(now);
+  updateWaterBackground(now);
   updateHUD();
   updateDebugDisplay();
   updateClock();
