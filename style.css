@@ -568,3 +568,17 @@ html,body{
 #ability-banner .ab-big{ color:var(--foam); font-size:40px; font-weight:700; letter-spacing:3px; }
 #ability-banner .ab-desc{ color:rgba(223,246,255,0.8); font-size:14px; margin-top:6px; font-family:'Roboto Mono', monospace; }
 #ability-banner.show{ animation:levelPop 3.4s ease-out forwards; }
+
+/* ---- cave hearts, boss bar, compass ---- */
+#cave-hud{ position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:7; text-align:center;
+  font-family:'Roboto Mono', monospace; pointer-events:none; user-select:none; text-shadow:0 1px 4px rgba(0,0,0,0.8); }
+#cave-hud .hearts{ color:#ff6b7a; font-size:22px; letter-spacing:4px; }
+#cave-hud .hearts span{ color:rgba(255,255,255,0.2); }
+#cave-hud .boss-name{ color:#ffc08f; font-size:13px; letter-spacing:2px; text-transform:uppercase; margin-top:6px; }
+#cave-hud .boss-bar{ width:280px; height:10px; margin:4px auto 0; background:rgba(2,16,25,0.7); border:1px solid rgba(223,246,255,0.35); border-radius:6px; overflow:hidden; }
+#cave-hud .boss-bar div{ height:100%; background:linear-gradient(90deg,#ff4a4a,#ff9d5c); transition:width 0.15s ease; }
+#cave-compass{ position:fixed; z-index:8; transform:translate(-50%,-50%); text-align:center; pointer-events:none; user-select:none;
+  color:var(--foam); font-family:'Roboto Mono', monospace; text-shadow:0 1px 4px rgba(0,0,0,0.9); }
+#cave-compass .cc-arrow{ font-size:26px; color:#ffc08f; line-height:1; }
+#cave-compass .cc-label{ font-size:12px; margin-top:2px; white-space:nowrap; }
+#cave-compass .cc-where{ font-size:10px; opacity:0.7; white-space:nowrap; }
