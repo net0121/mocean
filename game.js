@@ -372,7 +372,7 @@ const player = {
 const PLAYER_COLORS = { body:0xff9d5c, fin:0xffd194 };
 
 function tryJump(){
-  if(dungeons.active) return;
+  if(dungeons.active){ dungeons.fire(); return; }   // inside caves the jump key shoots bubbles
   if(!gameStarted || commandOpen) return;
   if(player.y < SURFACE_Y) return;       // already airborne
   if(player.jumpCd > 0) return;
@@ -441,6 +441,15 @@ function updatePlayer(dt){
   player.y += player.vy * dt;
 
   if(player.y < AIR_TOP){ player.y = AIR_TOP; if(player.vy < 0) player.vy = 0; }
+
+  // seafloor collision: rest on the sand and slide along slopes instead of sinking through
+  const floorLimit = floorY(player.x) - player.size*dungeons.look().size*0.6;
+  if(player.y > floorLimit){
+    const slope = (floorY(player.x + 4) - floorY(player.x - 4)) / 8;
+    player.y = floorLimit;
+    if(player.vy > 0) player.vy = 0;
+    if(slope * player.vx > 0) player.vx *= Math.pow(0.9, dt);   // uphill scrape slows you
+  }
 
   const nowUnderwater = player.y >= SURFACE_Y;
 
