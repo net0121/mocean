@@ -13,52 +13,166 @@ global.MoceanFish = function(ctx){
 
   /* ============================= FISH SHAPE ============================= */
 
-  function drawFishShape(g, size, colors, tailPhase, speedFrac, bank, heading){
+  /* Smooth curve through a list of points (quadratic midpoints) */
+  function smoothThrough(g, pts){
+    g.moveTo(pts[0].x, pts[0].y);
+    for(let i=1;i<pts.length-1;i++){
+      g.quadraticCurveTo(pts[i].x, pts[i].y, (pts[i].x+pts[i+1].x)/2, (pts[i].y+pts[i+1].y)/2);
+    }
+    const l = pts[pts.length-1];
+    g.lineTo(l.x, l.y);
+  }
+
+  /* Faces a creature along `angle` without ever swimming upside-down:
+     when heading left the sprite is mirrored vertically (eased, so turns look smooth). */
+  function orient(g, angle){
+    g.rotation = angle;
+    const target = Math.cos(angle) < 0 ? -1 : 1;
+    g.scale.y += (target - g.scale.y) * 0.16;
+  }
+
+  /* Wireframe fish. Nose points along +x, tail along -x.
+     A travelling wave runs down a spine (small at the head, large at the tail), so the whole
+     body S-curves while swimming. opts (all optional):
+       len, thick, nose        body proportions
+       dorsal (0..), pectoral  fin scale (0 hides)
+       tail: 'fork' | 'lunate' | 'fluke' | 'round',  tailLen, tailSpread
+       snout: {len}            bill / tusk / beak
+       hammer: true            hammerhead crossbar                                     */
+  function drawFishShape(g, size, colors, tailPhase, speedFrac, bank, heading, opts){
     g.clear();
+    const o = opts || {};
     const s = size;
-    const speed = clamp(speedFrac, 0, 1);
+    const sp = clamp(speedFrac, 0, 1);
+    const amp = 0.35 + sp*0.65;
+    const len = o.len || 1, th = o.thick || 1, noseK = o.nose || 0.65;
+    const dorsalK = o.dorsal === undefined ? 1 : o.dorsal;
+    const pectK = o.pectoral === undefined ? 1 : o.pectoral;
+    const N = 16;
+    const xHead = s*1.0*len, xTail = -s*0.85*len;
+    const bodyW = Math.max(1.6, s*0.075), finW = Math.max(1.2, s*0.06);
+    const line = (w, c, a) => g.lineStyle({ width:w, color:c, alpha:a === undefined ? 1 : a, ...ROUND });
 
-    const wagAmp = 0.30 + speed*0.55;
-    const waveAt = (xFrac, lag) => Math.sin(tailPhase - lag + xFrac*1.6) * wagAmp;
+    const spine = [], up = [], lo = [];
+    for(let i=0;i<=N;i++){
+      const t = i/N;
+      const x = xHead + (xTail - xHead)*t;
+      const h = s*th*(0.5*Math.sin(Math.PI*Math.pow(t, noseK)) + 0.09*t*t);
+      const cy = Math.sin(tailPhase - t*3.4) * amp * s*0.32 * Math.pow(t, 1.7) + (bank||0)*s*0.12*t*t;
+      spine.push({ x, y:cy, h });
+      up.push({ x, y:cy - h });
+      lo.push({ x, y:cy + h });
+    }
+    const P = spine[N];
 
-    const wagMid = waveAt(0.55, 0);
-    const wagJoint = waveAt(0.85, 0.55);
-    const wagTip = waveAt(1.0, 1.05);
+    /* ---- tail ---- */
+    const swing = Math.sin(tailPhase - 3.4 - 0.55) * amp * 0.5;
+    const cs = Math.cos(swing), sn = Math.sin(swing);
+    const T = (lx, ly) => ({ x:P.x + lx*cs - ly*sn, y:P.y + lx*sn + ly*cs });
+    const tl = s*0.8*(o.tailLen || 1), spread = s*0.55*(o.tailSpread || 1);
+    const kind = o.tail || 'fork';
+    let tipU, tipL, notch, ctrlU, ctrlL;
+    if(kind === 'round'){
+      tipU = T(-tl*0.9, -spread*0.6); tipL = T(-tl*0.9, spread*0.6); notch = T(-tl*0.8, 0);
+      ctrlU = T(-tl*0.5, -spread*0.9); ctrlL = T(-tl*0.5, spread*0.9);
+    } else if(kind === 'fluke'){
+      tipU = T(-tl*0.9, -spread*1.0); tipL = T(-tl*0.9, spread*1.0); notch = T(-tl*0.55, 0);
+      ctrlU = T(-tl*0.2, -spread*0.5); ctrlL = T(-tl*0.2, spread*0.5);
+    } else if(kind === 'lunate'){
+      tipU = T(-tl*1.05, -spread*1.15); tipL = T(-tl*1.05, spread*1.15); notch = T(-tl*0.4, 0);
+      ctrlU = T(-tl*0.35, -spread*0.35); ctrlL = T(-tl*0.35, spread*0.35);
+    } else {
+      tipU = T(-tl, -spread); tipL = T(-tl, spread); notch = T(-tl*0.62, 0);
+      ctrlU = T(-tl*0.4, -spread*0.55); ctrlL = T(-tl*0.4, spread*0.55);
+    }
+    const peduncle = Math.max(s*0.06, P.h);
+    line(finW*1.15, colors.fin, 0.95);
+    g.moveTo(P.x, P.y - peduncle);
+    g.quadraticCurveTo(ctrlU.x, ctrlU.y, tipU.x, tipU.y);
+    g.quadraticCurveTo((tipU.x+notch.x)/2 + (kind==='lunate'?s*0.05:0), (tipU.y+notch.y)/2, notch.x, notch.y);
+    g.quadraticCurveTo((tipL.x+notch.x)/2 + (kind==='lunate'?s*0.05:0), (tipL.y+notch.y)/2, tipL.x, tipL.y);
+    g.quadraticCurveTo(ctrlL.x, ctrlL.y, P.x, P.y + peduncle);
+    line(Math.max(1, finW*0.6), colors.fin, 0.4);                       // fin rays
+    for(let k=-1;k<=1;k++){
+      const r = T(-tl*(0.78 + (k===0?0.08:0)), k*spread*0.55);
+      g.moveTo(P.x, P.y); g.lineTo(r.x, r.y);
+    }
 
-    const bodyWave = Math.sin(tailPhase*0.5) * s * 0.045 * (0.35 + speed);
-    const stretch = 1 + speed*0.07;
+    /* ---- body outline (open at the tail, so the fin joins cleanly) ---- */
+    const outline = up.slice().reverse().concat(lo.slice(1));
+    line(bodyW, colors.body, 1);
+    smoothThrough(g, outline);
 
-    const baseX = -s*0.85;
-    const jointX = -s*1.3*stretch, jointY = wagJoint*s*0.62;
-    const tipX = -s*1.95*stretch, tipY = wagJoint*s*0.62 + wagTip*s*0.95;
-    g.beginFill(colors.fin, 0.92);
-    g.moveTo(baseX, -s*0.16 + wagMid*s*0.08);
-    g.quadraticCurveTo(jointX, jointY - s*0.24, tipX, tipY - s*0.05);
-    g.quadraticCurveTo(jointX, jointY + s*0.24, baseX, s*0.16 + wagMid*s*0.08);
-    g.closePath();
+    /* ---- snout / bill / hammer ---- */
+    const noseP = spine[0];
+    if(o.snout){
+      const sl = s*o.snout.len;
+      const wob = Math.sin(tailPhase)*s*0.02;
+      line(Math.max(1.2, s*0.05), o.snout.color || colors.fin, 1);
+      g.moveTo(spine[1].x, spine[1].y - spine[1].h*0.6);
+      g.lineTo(noseP.x + sl, noseP.y + wob);
+      g.lineTo(spine[1].x, spine[1].y + spine[1].h*0.6);
+    }
+    if(o.hammer){
+      line(bodyW, colors.body, 1);
+      const hx = xHead - s*0.18;
+      smoothThrough(g, [{x:hx, y:-s*0.44}, {x:xHead + s*0.1, y:-s*0.36}, {x:xHead + s*0.14, y:0}, {x:xHead + s*0.1, y:s*0.36}, {x:hx, y:s*0.44}]);
+    }
+
+    /* ---- dorsal fin ---- */
+    if(dorsalK > 0){
+      const a = up[5], b = up[9];
+      const flutter = Math.sin(tailPhase*1.3)*s*0.05;
+      const rise = s*0.38*dorsalK;
+      line(finW, colors.fin, 0.95);
+      g.moveTo(a.x, a.y);
+      g.quadraticCurveTo(a.x - s*0.12, a.y - rise*0.9 + flutter, (a.x+b.x)/2 - s*0.1 + flutter*0.6, a.y - rise);
+      g.quadraticCurveTo(b.x + s*0.02, b.y - rise*0.25, b.x, b.y);
+      line(Math.max(1, finW*0.55), colors.fin, 0.4);
+      g.moveTo(up[7].x, up[7].y); g.lineTo(up[7].x - s*0.08 + flutter*0.4, up[7].y - rise*0.8);
+    }
+
+    /* ---- pectoral + pelvic fins ---- */
+    if(pectK > 0){
+      const c = spine[5];
+      const ax = c.x, ay = c.y + c.h*0.35;
+      const flap = Math.sin(tailPhase*0.9 + 1.2)*s*0.12;
+      line(finW, colors.fin, 0.95);
+      g.moveTo(ax, ay);
+      g.quadraticCurveTo(ax - s*0.1, ay + s*0.4*pectK + flap, ax - s*0.5*pectK, ay + s*0.36*pectK + flap*1.3);
+      g.quadraticCurveTo(ax - s*0.3*pectK, ay + s*0.1, ax, ay);
+      const pv = lo[10];
+      line(Math.max(1, finW*0.8), colors.fin, 0.7);
+      g.moveTo(pv.x, pv.y);
+      g.lineTo(pv.x - s*0.22*pectK, pv.y + s*0.24*pectK + flap*0.4);
+      g.lineTo(pv.x - s*0.34*pectK, pv.y + s*0.04);
+    }
+
+    /* ---- gill, lateral line, mouth, eye ---- */
+    const gi = spine[4];
+    line(Math.max(1, s*0.045), colors.body, 0.55);
+    g.moveTo(gi.x + s*0.02, gi.y - gi.h*0.62);
+    g.quadraticCurveTo(gi.x - s*0.14, gi.y, gi.x + s*0.02, gi.y + gi.h*0.62);
+
+    line(1, colors.body, 0.28);
+    const lat = [];
+    for(let i=5;i<=13;i++) lat.push({ x:spine[i].x, y:spine[i].y - spine[i].h*0.12 });
+    smoothThrough(g, lat);
+
+    if(!o.snout && !o.hammer){
+      line(Math.max(1, s*0.04), colors.body, 0.7);
+      g.moveTo(noseP.x - s*0.02, noseP.y + s*0.03);
+      g.lineTo(noseP.x - s*0.16, noseP.y + s*0.06);
+    }
+
+    const ex = spine[2].x, ey = spine[2].y - spine[2].h*0.28;
+    const er = Math.max(1.6, s*0.085);
+    line(Math.max(1, s*0.035), 0xffffff, 0.9);
+    g.drawCircle(ex, ey, er);
+    g.lineStyle(0);
+    g.beginFill(0xffffff, 0.95);
+    g.drawCircle(ex + er*0.18, ey, Math.max(0.8, er*0.45));
     g.endFill();
-
-    g.lineStyle({ width: Math.max(1.6, s*0.085), color: colors.body, ...ROUND });
-    g.moveTo(s*1.0*stretch, 0);
-    g.quadraticCurveTo(
-      s*0.5, -s*0.60 + bodyWave*0.4 + wagMid*s*0.10,
-      -s*0.85, -s*0.30 + bank*s*0.15 + bodyWave + wagJoint*s*0.12
-    );
-    g.quadraticCurveTo(-s*1.05, bodyWave + wagJoint*s*0.12, -s*0.85, s*0.30 - bank*s*0.15 + bodyWave + wagJoint*s*0.12);
-    g.quadraticCurveTo(s*0.5, s*0.62 + bodyWave*0.4 + wagMid*s*0.10, s*1.0*stretch, 0);
-
-    const ridgeFlutter = Math.sin(tailPhase*1.3) * 0.12;
-    g.lineStyle({ width: Math.max(1.4, s*0.07), color: colors.fin, ...ROUND });
-    g.moveTo(-s*0.22, -s*0.34 + bodyWave*0.5 + wagMid*s*0.08);
-    g.quadraticCurveTo(
-      -s*0.05, -s*0.50 + ridgeFlutter*s*0.10 + wagMid*s*0.08,
-      s*0.16, -s*0.36 + bodyWave*0.3 + wagMid*s*0.06
-    );
-
-    const row = Math.sin(tailPhase + 1.4) * 0.4 + 0.2;
-    g.moveTo(s*0.18, s*0.12);
-    g.quadraticCurveTo(s*0.05 + row*s*0.1, s*0.55, -s*0.15, s*0.42 + row*s*0.15);
-
   }
 
   const SHARK_COLORS = { body:0x9aa6b2, fin:0xcfd8e0 };
@@ -127,8 +241,8 @@ global.MoceanFish = function(ctx){
 
       const mx = s.x + Math.cos(m.offAngle)*m.offRad;
       const my = s.y + Math.sin(m.offAngle)*m.offRad*0.6;
-      m.g.x = mx; m.g.y = my; m.g.rotation = heading;
-      drawFishShape(m.g, m.size, s.palette, m.phase, 0.8, Math.sin(m.offAngle)*0.3);
+      m.g.x = mx; m.g.y = my; orient(m.g, heading);
+      drawFishShape(m.g, m.size, s.palette, m.phase, 0.8, Math.sin(m.offAngle)*0.3, 0, { thick:0.95 });
     }
   }
 
@@ -284,7 +398,7 @@ global.MoceanFish = function(ctx){
     t.displayAngle = lerpAngle(t.displayAngle, t.angle, 0.03*dt);
     t.flipperPhase += 0.05*dt;
 
-    t.g.x = t.x; t.g.y = t.y; t.g.rotation = t.displayAngle;
+    t.g.x = t.x; t.g.y = t.y; orient(t.g, t.displayAngle);
     redrawTurtle(t);
   }
 
@@ -343,8 +457,8 @@ global.MoceanFish = function(ctx){
     sh.tailPhase += 0.1*dt*3;
     sh.life -= dt;
 
-    sh.g.x = sh.x; sh.g.y = sh.y; sh.g.rotation = sh.displayAngle;
-    drawFishShape(sh.g, sh.size, SHARK_COLORS, sh.tailPhase, 1, sh.bank);
+    sh.g.x = sh.x; sh.g.y = sh.y; orient(sh.g, sh.displayAngle);
+    drawFishShape(sh.g, sh.size, SHARK_COLORS, sh.tailPhase, 1, sh.bank, 0, { thick:0.78, len:1.1, dorsal:1.5, tail:'lunate', tailLen:1.05 });
   }
 
   /* ============================= OCTOPUS ============================= */
@@ -396,7 +510,7 @@ global.MoceanFish = function(ctx){
     o.displayAngle = lerpAngle(o.displayAngle, o.angle, 0.04*dt);
     o.tentaclePhase += 0.08*dt*(1+o.jetPower);
 
-    o.g.x = o.x; o.g.y = o.y; o.g.rotation = o.displayAngle;
+    o.g.x = o.x; o.g.y = o.y; orient(o.g, o.displayAngle);
     redrawOctopus(o);
   }
 
@@ -510,7 +624,7 @@ global.MoceanFish = function(ctx){
     r.displayAngle = lerpAngle(r.displayAngle, r.angle, 0.02*dt);
     r.wingPhase += 0.07*dt;
 
-    r.g.x = r.x; r.g.y = r.y; r.g.rotation = r.displayAngle;
+    r.g.x = r.x; r.g.y = r.y; orient(r.g, r.displayAngle);
     redrawStingray(r);
   }
 
@@ -704,20 +818,46 @@ global.MoceanFish = function(ctx){
   }
 
   function redrawPufferfish(p){
-    const g = p.g;
+    const g = p.g, s = p.size;
     g.clear();
-    const s = p.size;
-    const puff = 1 + Math.sin(p.puffPhase*2)*0.25;
+    const face = p.vx < -0.05 ? -1 : (p.vx > 0.05 ? 1 : (p.face || 1));
+    p.face = face;
+    g.scale.x += (face - g.scale.x)*0.2;
+    const puff = 1 + Math.sin(p.puffPhase*2)*0.22;
+    const R = s*puff;
+    const wag = Math.sin(p.puffPhase*6)*s*0.18;
+    const line = (w,c,a)=> g.lineStyle({ width:w, color:c, alpha:a===undefined?1:a, ...ROUND });
 
-    g.lineStyle({ width: Math.max(1.4, s*0.12), color: p.color, ...ROUND });
-    g.drawCircle(0, 0, s*puff);
-
-    for(let i=0;i<8;i++){
-      const ang = (i/8)*Math.PI*2;
-      g.moveTo(0, 0);
-      g.lineTo(Math.cos(ang)*s*puff*1.3, Math.sin(ang)*s*puff*1.3);
+    // round tail
+    line(Math.max(1.2, s*0.09), 0xffe680, 0.9);
+    g.moveTo(-R*0.92, -s*0.12);
+    g.quadraticCurveTo(-R*1.5, -s*0.55 + wag, -R*1.55, wag);
+    g.quadraticCurveTo(-R*1.5, s*0.55 + wag, -R*0.92, s*0.12);
+    // body
+    line(Math.max(1.5, s*0.11), p.color, 1);
+    g.drawEllipse(0, 0, R, R*0.9);
+    // belly arc + spots
+    line(1, p.color, 0.35);
+    g.arc(0, 0, R*0.72, 0.5, Math.PI - 0.5);
+    for(let i=0;i<4;i++) g.drawCircle(-R*0.35 + i*R*0.28, -R*0.35 + (i%2)*R*0.2, 1.1);
+    // spikes (stand a bit prouder when puffed)
+    line(Math.max(1, s*0.06), 0xfff0a8, 0.8);
+    for(let i=0;i<14;i++){
+      const a = (i/14)*Math.PI*2 + 0.2;
+      const rr = R*(i%2 ? 1.0 : 0.98);
+      g.moveTo(Math.cos(a)*rr, Math.sin(a)*rr*0.9);
+      g.lineTo(Math.cos(a)*(rr + s*(0.2 + (puff-0.78)*0.35)), Math.sin(a)*(rr + s*(0.2 + (puff-0.78)*0.35))*0.9);
     }
-
+    // pectoral flutter
+    const fl = Math.sin(p.puffPhase*9)*s*0.14;
+    line(Math.max(1, s*0.07), 0xffe680, 0.9);
+    g.moveTo(R*0.05, s*0.2); g.quadraticCurveTo(-R*0.2, s*0.5 + fl, -R*0.45, s*0.3 + fl);
+    // eye + mouth
+    line(Math.max(1, s*0.06), 0xffffff, 0.95);
+    g.drawCircle(R*0.5, -R*0.2, Math.max(2, s*0.2));
+    g.lineStyle(0); g.beginFill(0xffffff, 0.95); g.drawCircle(R*0.55, -R*0.2, Math.max(1, s*0.09)); g.endFill();
+    line(Math.max(1, s*0.06), p.color, 0.9);
+    g.moveTo(R*0.92, s*0.06); g.lineTo(R*0.74, s*0.14);
   }
 
   /* ============================= NEW CREATURES ============================= */
@@ -756,7 +896,7 @@ global.MoceanFish = function(ctx){
     m.displayAngle = lerpAngle(m.displayAngle, m.angle, 0.015*dt);
     m.wingPhase += 0.04*dt;
 
-    m.g.x = m.x; m.g.y = m.y; m.g.rotation = m.displayAngle;
+    m.g.x = m.x; m.g.y = m.y; orient(m.g, m.displayAngle);
     redrawMantaRay(m);
   }
 
@@ -876,29 +1016,31 @@ global.MoceanFish = function(ctx){
     a.displayAngle = lerpAngle(a.displayAngle, a.angle, 0.025*dt);
     a.lurePhase += 0.06*dt;
 
-    a.g.x = a.x; a.g.y = a.y; a.g.rotation = a.displayAngle;
+    a.g.x = a.x; a.g.y = a.y; orient(a.g, a.displayAngle);
     redrawAnglerfish(a);
   }
 
   function redrawAnglerfish(a){
-    const g = a.g;
-    g.clear();
-    const s = a.size;
-
-    g.lineStyle({ width: Math.max(1.8, s*0.12), color: 0x3a2a1a, ...ROUND });
-    g.drawEllipse(0, 0, s, s*0.75);
-
-    g.lineStyle({ width: Math.max(1, s*0.06), color: 0x5a4a3a, ...ROUND });
-    g.moveTo(s*0.3, -s*0.5);
-    g.quadraticCurveTo(s*0.6, -s*1.2, s*0.4, -s*1.5);
-
-    g.beginFill(0x88ff44, 0.9);
-    g.drawCircle(s*0.4, -s*1.5, Math.max(2, s*0.1));
-    g.endFill();
-
-    g.lineStyle(1.2, 0x88ff44, 0.5);
-    g.drawCircle(s*0.4, -s*1.5, Math.max(3, s*0.18));
-
+    const s = a.size, g = a.g;
+    drawFishShape(g, s*0.9, { body:0x9a7550, fin:0xc49a68 }, a.lurePhase*1.4, Math.hypot(a.vx, a.vy)/0.5, 0, 0,
+      { thick:1.5, len:0.85, nose:0.45, dorsal:0.4, pectoral:0.7, tail:'round', tailLen:0.8 });
+    // jagged teeth
+    g.lineStyle({ width:Math.max(1, s*0.04), color:0xf4f0e0, alpha:0.9, ...ROUND });
+    for(let i=0;i<5;i++){
+      const tx = s*0.74 - i*s*0.1;
+      g.moveTo(tx, s*0.1); g.lineTo(tx - s*0.04, s*0.26);
+    }
+    // lure on a swaying stalk
+    const sway = Math.sin(a.lurePhase)*s*0.18;
+    const bx = s*0.75 + sway, by = -s*1.45;
+    g.lineStyle({ width:Math.max(1, s*0.06), color:0xc49a68, ...ROUND });
+    g.moveTo(s*0.35, -s*0.55);
+    g.quadraticCurveTo(s*0.55, -s*1.5, bx, by);
+    const glow = 0.65 + 0.35*Math.sin(a.lurePhase*2.3);
+    g.lineStyle(0);
+    g.beginFill(0x88ff44, 0.18*glow); g.drawCircle(bx, by, Math.max(7, s*0.5)); g.endFill();
+    g.beginFill(0x88ff44, 0.95); g.drawCircle(bx, by, Math.max(2.2, s*0.11)); g.endFill();
+    g.lineStyle(1.2, 0xbaff88, 0.5*glow); g.drawCircle(bx, by, Math.max(4, s*0.2));
   }
 
   /* ---- NARWHAL ---- */
@@ -935,30 +1077,23 @@ global.MoceanFish = function(ctx){
     n.displayAngle = lerpAngle(n.displayAngle, n.angle, 0.02*dt);
     n.tailPhase += 0.08*dt;
 
-    n.g.x = n.x; n.g.y = n.y; n.g.rotation = n.displayAngle;
+    n.g.x = n.x; n.g.y = n.y; orient(n.g, n.displayAngle);
     redrawNarwhal(n);
   }
 
   function redrawNarwhal(n){
-    const g = n.g;
-    g.clear();
     const s = n.size;
-
-    g.lineStyle({ width: Math.max(2, s*0.08), color: 0xc8d8e8, ...ROUND });
-    g.drawEllipse(0, 0, s*0.9, s*0.55);
-
-    g.lineStyle({ width: Math.max(1.5, s*0.06), color: 0xa8b8c8, ...ROUND });
-    g.moveTo(s*0.7, -s*0.1);
-    g.lineTo(s*1.8, -s*0.25);
-    g.lineTo(s*1.85, -s*0.15);
-    g.lineTo(s*0.75, s*0.05);
-
-    const tailWag = Math.sin(n.tailPhase)*s*0.15;
-    g.moveTo(-s*0.8, 0);
-    g.lineTo(-s*1.4, -s*0.25 + tailWag);
-    g.lineTo(-s*1.5, s*0.05 + tailWag);
-    g.lineTo(-s*0.85, s*0.15);
-
+    drawFishShape(n.g, s*0.9, { body:0xc8d8e8, fin:0xe2ecf5 }, n.tailPhase, Math.hypot(n.vx, n.vy)/1.4, 0, 0,
+      { thick:0.9, len:1.0, dorsal:0, pectoral:0.8, tail:'fluke', tailSpread:1.15 });
+    // spiral tusk
+    const g = n.g, x0 = s*0.9, x1 = s*2.1;
+    g.lineStyle({ width:Math.max(1.4, s*0.05), color:0xfff2d6, ...ROUND });
+    g.moveTo(x0, 0); g.lineTo(x1, -s*0.04);
+    g.lineStyle({ width:1, color:0xfff2d6, alpha:0.55 });
+    for(let i=1;i<7;i++){
+      const x = x0 + (x1-x0)*i/7;
+      g.moveTo(x, -s*0.06); g.lineTo(x + s*0.08, s*0.05);
+    }
   }
 
   /* ---- HAMMERHEAD SHARK ---- */
@@ -995,35 +1130,13 @@ global.MoceanFish = function(ctx){
     h.displayAngle = lerpAngle(h.displayAngle, h.angle, 0.025*dt);
     h.tailPhase += 0.09*dt;
 
-    h.g.x = h.x; h.g.y = h.y; h.g.rotation = h.displayAngle;
+    h.g.x = h.x; h.g.y = h.y; orient(h.g, h.displayAngle);
     redrawHammerhead(h);
   }
 
   function redrawHammerhead(h){
-    const g = h.g;
-    g.clear();
-    const s = h.size;
-
-    g.lineStyle({ width: Math.max(2, s*0.08), color: 0x8a9aaa, ...ROUND });
-    g.drawEllipse(0, 0, s*0.85, s*0.5);
-
-    g.lineStyle({ width: Math.max(1.5, s*0.06), color: 0x8a9aaa, ...ROUND });
-    g.moveTo(s*0.5, -s*0.2);
-    g.lineTo(s*0.6, -s*0.55);
-    g.lineTo(s*0.4, -s*0.6);
-    g.lineTo(s*0.3, -s*0.25);
-
-    g.moveTo(s*0.5, s*0.2);
-    g.lineTo(s*0.6, s*0.55);
-    g.lineTo(s*0.4, s*0.6);
-    g.lineTo(s*0.3, s*0.25);
-
-    const tailWag = Math.sin(h.tailPhase)*s*0.12;
-    g.moveTo(-s*0.7, 0);
-    g.lineTo(-s*1.3, -s*0.2 + tailWag);
-    g.lineTo(-s*1.4, s*0.1 + tailWag);
-    g.lineTo(-s*0.75, s*0.15);
-
+    drawFishShape(h.g, h.size, { body:0x9db0c2, fin:0xc9d8e6 }, h.tailPhase, Math.hypot(h.vx, h.vy)/1.6, 0, 0,
+      { thick:0.68, len:0.92, hammer:true, dorsal:1.5, tail:'lunate', tailLen:1.1 });
   }
 
   /* ---- GIANT ISOPOD ---- */
@@ -1104,28 +1217,31 @@ global.MoceanFish = function(ctx){
     lf.displayAngle = lerpAngle(lf.displayAngle, lf.angle, 0.03*dt);
     lf.finPhase += 0.08*dt;
 
-    lf.g.x = lf.x; lf.g.y = lf.y; lf.g.rotation = lf.displayAngle;
+    lf.g.x = lf.x; lf.g.y = lf.y; orient(lf.g, lf.displayAngle);
     redrawLionfish(lf);
   }
 
   function redrawLionfish(lf){
-    const g = lf.g;
-    g.clear();
-    const s = lf.size;
-
-    g.lineStyle({ width: Math.max(1.6, s*0.12), color: 0xff6b6b, ...ROUND });
-    g.drawEllipse(0, 0, s*0.8, s*0.5);
-
-    for(let i=0;i<6;i++){
-      const fy = lerp(-s*0.4, s*0.4, i/5);
-      const fan = Math.sin(lf.finPhase + i*0.8)*s*0.25;
-      g.lineStyle({ width: Math.max(0.8, s*0.06), color: 0xff8f8f, alpha:0.8 });
-      g.moveTo(-s*0.3, fy);
-      g.lineTo(-s*0.8, fy - s*0.4 + fan);
-      g.lineTo(-s*0.5, fy - s*0.6 + fan);
-      g.lineTo(-s*0.1, fy - s*0.1);
+    const sp = Math.hypot(lf.vx, lf.vy)/0.6;
+    drawFishShape(lf.g, lf.size, { body:0xff6b6b, fin:0xffa0a0 }, lf.finPhase*1.2, sp, 0, 0, { thick:0.95, dorsal:0, pectoral:0.6, tail:'round' });
+    const g = lf.g, s = lf.size;
+    // venomous dorsal spines fanning up and back
+    for(let i=0;i<7;i++){
+      const t = 0.16 + i*0.075;
+      const bx = s*1.0 - t*s*1.85;
+      const by = -s*0.46*Math.sin(Math.PI*Math.pow(t,0.65));
+      const sway = Math.sin(lf.finPhase + i*0.7)*s*0.1;
+      g.lineStyle({ width:Math.max(0.9, s*0.05), color:0xffb0b0, alpha:0.85, ...ROUND });
+      g.moveTo(bx, by);
+      g.lineTo(bx - s*0.28 + sway, by - s*0.72 - (i%2)*s*0.12);
     }
-
+    // long streaming pectoral rays
+    for(let i=0;i<6;i++){
+      const sway = Math.sin(lf.finPhase*1.1 + i*0.6)*s*0.12;
+      g.lineStyle({ width:Math.max(0.8, s*0.04), color:0xff9a9a, alpha:0.6, ...ROUND });
+      g.moveTo(s*0.25, s*0.12);
+      g.lineTo(-s*(0.35 + i*0.1), s*(0.5 + i*0.1) + sway);
+    }
   }
 
   /* ---- CUTTLEFISH ---- */
@@ -1223,29 +1339,17 @@ global.MoceanFish = function(ctx){
     pf.displayAngle = lerpAngle(pf.displayAngle, pf.angle, 0.03*dt);
     pf.tailPhase += 0.12*dt;
 
-    pf.g.x = pf.x; pf.g.y = pf.y; pf.g.rotation = pf.displayAngle;
+    pf.g.x = pf.x; pf.g.y = pf.y; orient(pf.g, pf.displayAngle);
     redrawParrotfish(pf);
   }
 
   function redrawParrotfish(pf){
-    const g = pf.g;
-    g.clear();
-    const s = pf.size;
-
-    g.lineStyle({ width: Math.max(1.6, s*0.1), color: pf.color, ...ROUND });
-    g.drawEllipse(0, 0, s*0.9, s*0.5);
-
-    g.lineStyle({ width: Math.max(1.2, s*0.07), color: 0x7fe8d4, ...ROUND });
-    g.moveTo(s*0.5, -s*0.15);
-    g.lineTo(s*0.9, -s*0.35);
-    g.lineTo(s*0.85, -s*0.05);
-
-    const tailWag = Math.sin(pf.tailPhase)*s*0.2;
-    g.moveTo(-s*0.7, 0);
-    g.lineTo(-s*1.2, -s*0.25 + tailWag);
-    g.lineTo(-s*1.3, s*0.05 + tailWag);
-    g.lineTo(-s*0.75, s*0.15);
-
+    const sp = Math.hypot(pf.vx, pf.vy)/1.0;
+    drawFishShape(pf.g, pf.size*0.95, { body:pf.color, fin:0x9ff2e4 }, pf.tailPhase, sp, 0, 0, { thick:1.12, nose:0.5, len:0.95, tail:'round', dorsal:1.25 });
+    // beak-like mouth plate
+    const g = pf.g, s = pf.size*0.95;
+    g.lineStyle({ width:Math.max(1.2, s*0.06), color:0xffe9a8, ...ROUND });
+    g.moveTo(s*0.95, -s*0.05); g.lineTo(s*1.05, s*0.06); g.lineTo(s*0.9, s*0.12);
   }
 
   /* ---- BLOBFISH ---- */
@@ -1397,36 +1501,21 @@ global.MoceanFish = function(ctx){
     w.displayAngle = lerpAngle(w.displayAngle, w.angle, 0.012*dt);
     w.tailPhase += 0.04*dt;
 
-    w.g.x = w.x; w.g.y = w.y; w.g.rotation = w.displayAngle;
+    w.g.x = w.x; w.g.y = w.y; orient(w.g, w.displayAngle);
     redrawWhale(w);
   }
 
   function redrawWhale(w){
-    const g = w.g;
-    g.clear();
     const s = w.size;
-
-    g.lineStyle({ width: Math.max(2.5, s*0.06), color: 0x4a6a8a, ...ROUND });
-    g.drawEllipse(0, 0, s, s*0.55);
-
-    g.lineStyle({ width: Math.max(1.5, s*0.04), color: 0x5a7a9a, ...ROUND });
-    g.moveTo(s*0.6, -s*0.35);
-    g.quadraticCurveTo(s*0.8, -s*0.6, s*0.4, -s*0.5);
-
-    const tailWag = Math.sin(w.tailPhase)*s*0.2;
-    g.moveTo(-s*0.9, 0);
-    g.lineTo(-s*1.5, -s*0.35 + tailWag);
-    g.lineTo(-s*1.6, s*0.1 + tailWag);
-    g.lineTo(-s*0.95, s*0.2);
-
-    g.lineStyle({ width: Math.max(1.5, s*0.04), color: 0x5a7a9a, ...ROUND });
-    g.moveTo(s*0.3, -s*0.15);
-    g.lineTo(s*0.5, -s*0.45);
-    g.lineTo(s*0.35, -s*0.35);
-    g.moveTo(s*0.3, s*0.15);
-    g.lineTo(s*0.5, s*0.45);
-    g.lineTo(s*0.35, s*0.35);
-
+    drawFishShape(w.g, s*0.95, { body:0x6f95bb, fin:0x93b4d4 }, w.tailPhase, Math.hypot(w.vx, w.vy)/0.6, 0, 0,
+      { thick:0.82, len:1.1, nose:0.55, dorsal:0.25, pectoral:0.9, tail:'fluke', tailLen:0.9, tailSpread:1.25 });
+    // throat grooves
+    const g = w.g;
+    g.lineStyle({ width:1, color:0x93b4d4, alpha:0.4 });
+    for(let i=0;i<5;i++){
+      const x = s*(0.75 - i*0.17);
+      g.moveTo(x, s*0.2); g.lineTo(x - s*0.1, s*0.44 - i*0.02*s);
+    }
   }
 
   /* ---- DOLPHIN ---- */
@@ -1465,29 +1554,13 @@ global.MoceanFish = function(ctx){
     d.displayAngle = lerpAngle(d.displayAngle, d.angle, 0.04*dt);
     d.tailPhase += 0.14*dt;
 
-    d.g.x = d.x; d.g.y = d.y; d.g.rotation = d.displayAngle;
+    d.g.x = d.x; d.g.y = d.y; orient(d.g, d.displayAngle);
     redrawDolphin(d);
   }
 
   function redrawDolphin(d){
-    const g = d.g;
-    g.clear();
-    const s = d.size;
-
-    g.lineStyle({ width: Math.max(1.8, s*0.1), color: 0x7a8a9a, ...ROUND });
-    g.drawEllipse(0, 0, s*0.9, s*0.45);
-
-    g.lineStyle({ width: Math.max(1.2, s*0.06), color: 0x8a9aaa, ...ROUND });
-    g.moveTo(s*0.4, -s*0.1);
-    g.lineTo(s*0.65, -s*0.45);
-    g.lineTo(s*0.5, -s*0.35);
-
-    const tailWag = Math.sin(d.tailPhase)*s*0.2;
-    g.moveTo(-s*0.75, 0);
-    g.lineTo(-s*1.3, -s*0.3 + tailWag);
-    g.lineTo(-s*1.4, s*0.08 + tailWag);
-    g.lineTo(-s*0.8, s*0.15);
-
+    drawFishShape(d.g, d.size, { body:0x8fa6bc, fin:0xb9cbdb }, d.tailPhase, Math.hypot(d.vx, d.vy)/1.6, 0, 0,
+      { thick:0.74, len:1.05, nose:0.7, snout:{ len:0.32, color:0x8fa6bc }, dorsal:1.0, tail:'fluke', tailSpread:1.15 });
   }
 
   /* ---- SWORDFISH ---- */
@@ -1524,30 +1597,13 @@ global.MoceanFish = function(ctx){
     sf.displayAngle = lerpAngle(sf.displayAngle, sf.angle, 0.035*dt);
     sf.tailPhase += 0.16*dt;
 
-    sf.g.x = sf.x; sf.g.y = sf.y; sf.g.rotation = sf.displayAngle;
+    sf.g.x = sf.x; sf.g.y = sf.y; orient(sf.g, sf.displayAngle);
     redrawSwordfish(sf);
   }
 
   function redrawSwordfish(sf){
-    const g = sf.g;
-    g.clear();
-    const s = sf.size;
-
-    g.lineStyle({ width: Math.max(2, s*0.08), color: 0x5a6a8a, ...ROUND });
-    g.drawEllipse(0, 0, s*0.85, s*0.4);
-
-    g.lineStyle({ width: Math.max(1.5, s*0.05), color: 0x7a8aaa, ...ROUND });
-    g.moveTo(s*0.6, -s*0.05);
-    g.lineTo(s*2.0, -s*0.02);
-    g.lineTo(s*2.05, s*0.02);
-    g.lineTo(s*0.6, s*0.05);
-
-    const tailWag = Math.sin(sf.tailPhase)*s*0.18;
-    g.moveTo(-s*0.7, 0);
-    g.lineTo(-s*1.3, -s*0.25 + tailWag);
-    g.lineTo(-s*1.4, s*0.08 + tailWag);
-    g.lineTo(-s*0.75, s*0.12);
-
+    drawFishShape(sf.g, sf.size, { body:0x6f86b8, fin:0x9cb2dc }, sf.tailPhase, Math.hypot(sf.vx, sf.vy)/2.2, 0, 0,
+      { thick:0.62, len:1.05, nose:0.8, snout:{ len:1.15, color:0xc8d8f0 }, dorsal:1.35, tail:'lunate', tailSpread:1.0 });
   }
 
   /* ---- NAUTILUS ---- */
@@ -1584,7 +1640,7 @@ global.MoceanFish = function(ctx){
     n.displayAngle = lerpAngle(n.displayAngle, n.angle, 0.02*dt);
     n.shellPhase += 0.06*dt;
 
-    n.g.x = n.x; n.g.y = n.y; n.g.rotation = n.displayAngle;
+    n.g.x = n.x; n.g.y = n.y; orient(n.g, n.displayAngle);
     redrawNautilus(n);
   }
 
@@ -1703,7 +1759,7 @@ global.MoceanFish = function(ctx){
     sf.displayAngle = lerpAngle(sf.displayAngle, sf.angle, 0.015*dt);
     sf.finPhase += 0.06*dt;
 
-    sf.g.x = sf.x; sf.g.y = sf.y; sf.g.rotation = sf.displayAngle;
+    sf.g.x = sf.x; sf.g.y = sf.y; orient(sf.g, sf.displayAngle);
     redrawSunfish(sf);
   }
 
@@ -1825,31 +1881,18 @@ global.MoceanFish = function(ctx){
     gs.displayAngle = lerpAngle(gs.displayAngle, gs.angle, 0.02*dt);
     gs.jawPhase += 0.05*dt;
 
-    gs.g.x = gs.x; gs.g.y = gs.y; gs.g.rotation = gs.displayAngle;
+    gs.g.x = gs.x; gs.g.y = gs.y; orient(gs.g, gs.displayAngle);
     redrawGoblinShark(gs);
   }
 
   function redrawGoblinShark(gs){
-    const g = gs.g;
-    g.clear();
     const s = gs.size;
-    const jawOpen = Math.sin(gs.jawPhase)*s*0.15;
-
-    g.lineStyle({ width: Math.max(2, s*0.08), color: 0x9a8aaa, ...ROUND });
-    g.drawEllipse(0, 0, s*0.85, s*0.45);
-
-    g.lineStyle({ width: Math.max(1.5, s*0.06), color: 0xbaaaca, ...ROUND });
-    g.moveTo(s*0.5, -s*0.1);
-    g.lineTo(s*1.6, -s*0.05 + jawOpen*0.3);
-    g.lineTo(s*1.65, s*0.02 + jawOpen*0.3);
-    g.lineTo(s*0.5, s*0.1);
-
-    const tailWag = Math.sin(gs.jawPhase*0.8)*s*0.15;
-    g.moveTo(-s*0.7, 0);
-    g.lineTo(-s*1.3, -s*0.2 + tailWag);
-    g.lineTo(-s*1.4, s*0.08 + tailWag);
-    g.lineTo(-s*0.75, s*0.12);
-
+    drawFishShape(gs.g, s, { body:0xb09ac4, fin:0xd3c4e2 }, gs.jawPhase*1.6, Math.hypot(gs.vx, gs.vy)/1.0, 0, 0,
+      { thick:0.66, len:0.9, snout:{ len:0.8, color:0xe0d0f0 }, dorsal:1.0, tail:'fork', tailLen:1.15 });
+    // protruding jaw
+    const g = gs.g, open = (Math.sin(gs.jawPhase)*0.5 + 0.5)*s*0.18;
+    g.lineStyle({ width:Math.max(1.2, s*0.05), color:0xff9aa8, alpha:0.85, ...ROUND });
+    g.moveTo(s*0.75, s*0.12); g.lineTo(s*0.95, s*0.2 + open); g.lineTo(s*0.55, s*0.2 + open*0.6);
   }
 
   /* ---- OARFISH ---- */
@@ -1947,7 +1990,7 @@ global.MoceanFish = function(ctx){
     m.displayAngle = lerpAngle(m.displayAngle, m.angle, 0.015*dt);
     m.tailPhase += 0.05*dt;
 
-    m.g.x = m.x; m.g.y = m.y; m.g.rotation = m.displayAngle;
+    m.g.x = m.x; m.g.y = m.y; orient(m.g, m.displayAngle);
     redrawManatee(m);
   }
 
@@ -1974,6 +2017,7 @@ global.MoceanFish = function(ctx){
 
   return {
     drawFishShape,
+    orient,
     SHARK_COLORS,
     schools,
     spawnSchool,
