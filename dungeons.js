@@ -25,11 +25,13 @@
 
 global.MoceanDungeons = function(ctx){
   const { app, world, player, keys, rand, randi, clamp, lerpAngle, floorY,
-          PLAYER_COLORS, SHARK_COLORS, hideWhenInside, addXP, popText,
+          PLAYER_COLORS, SHARK_COLORS, drawFishShape, view, hideWhenInside, addXP, popText,
           burstBubbles, playBlip, isStarted } = ctx;
 
   const SAVE_KEY = 'mocean.dungeons.v1';
   const T = 110; // maze tile size in world units
+  const MAX_HP = 5;
+  const ROUND = { cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND };
 
   /* ---------------------------------------------------------------- data */
 
@@ -83,7 +85,8 @@ global.MoceanDungeons = function(ctx){
   dungeonC.visible = false;
   const mazeG = new PIXI.Graphics();
   const entG  = new PIXI.Graphics();
-  dungeonC.addChild(mazeG, entG);
+  const bossG = new PIXI.Graphics();          // the megalodon reuses the original wireframe fish
+  dungeonC.addChild(mazeG, entG, bossG);
 
   const labels = DUNGEONS.map(d=>{
     const t = new PIXI.Text('', { fontFamily:'Roboto Mono, monospace', fontSize:15, fill:0xdff6ff,
@@ -255,8 +258,8 @@ global.MoceanDungeons = function(ctx){
 
   function drawAura(now){
     auraG.clear();
-    auraG.x = app.screen.width/2;
-    auraG.y = app.screen.height/2 + player.bob;
+    auraG.x = app.screen.width/2 + view.ox;
+    auraG.y = app.screen.height/2 + player.bob + view.oy;
     const s = player.size * look().size;
     if(save.glow && has('glow')){
       const p = 0.5 + 0.5*Math.sin(now*0.004);
@@ -428,17 +431,17 @@ global.MoceanDungeons = function(ctx){
       const p = cellPos(cx,cy);
       guards.push({ kind:d.enemies[randi(0, d.enemies.length-1)], hp:2, dir:0,
                     cx, cy, x:p.x, y:p.y, tx:p.x, ty:p.y, ncx:cx, ncy:cy,
-                    speed: 1.3 + d.id*0.2 + rand(0,0.3), r:24, ph:rand(0,6) });
+                    speed: 1.0 + d.id*0.12 + rand(0,0.25), r:22, ph:rand(0,6), vx:0, vy:0 });
     }
     const A = m.arena, ac = { x:(A.x0 + A.w/2)*T, y:(A.y0 + A.h/2)*T };
-    const hp = 18 + 8*d.id;
+    const hp = 12 + 4*d.id;
     const boss = Object.assign({ hp, max:hp, x:ac.x + 200, y:ac.y, vx:0, vy:0, ang:Math.PI, state:'idle',
                                  t:0, hit:0, active:false, dead:false, atk:'charge', tx:ac.x, ty:ac.y }, d.boss);
     const start = cellPos(0,0);
     const seen = Array.from({length:m.H}, ()=> new Array(m.W).fill(false));
 
     M = { d, m, pearls, guards, start, orb:ac, ac, orbOn:false, seen, armed:false, done:false, frame:0,
-          boss, shots:[], bubs:[], php:3, fireCd:0, sealed:false };
+          boss, shots:[], bubs:[], php:MAX_HP, fireCd:0, sealed:false };
     const cell = Math.max(4, Math.floor(Math.min(230/m.W, 170/m.H)));
     mapEl.width = m.W*cell; mapEl.height = m.H*cell; M.cell = cell;
 
@@ -483,7 +486,7 @@ global.MoceanDungeons = function(ctx){
       const d = Math.sqrt(d2), push = (r - d)/d;
       player.x += dx*push; player.y += dy*push;
       const ux = dx/d, uy = dy/d, vn = player.vx*ux + player.vy*uy;
-      if(vn < 0){ player.vx -= vn*ux; player.vy -= vn*uy; }
+      if(vn < 0){ player.vx -= vn*ux*1.2; player.vy -= vn*uy*1.2; }
     }
   }
 
@@ -520,7 +523,7 @@ global.MoceanDungeons = function(ctx){
   }
 
   function defeat(){
-    M.php = 3; M.shots.length = 0; M.bubs.length = 0; M.armed = false;
+    M.php = MAX_HP; M.shots.length = 0; M.bubs.length = 0; M.armed = false;
     player.x = M.start.x; player.y = M.start.y; player.vx = player.vy = 0;
     invuln = 120;
     const b = M.boss;
@@ -532,7 +535,7 @@ global.MoceanDungeons = function(ctx){
   }
 
   function damagePlayer(fx, fy){
-    M.php--; invuln = 90;
+    M.php--; invuln = 110;
     const a = Math.atan2(player.y - fy, player.x - fx);
     player.vx += Math.cos(a)*9; player.vy += Math.sin(a)*9;
     burstBubbles(player.x, player.y, 10); playBlip();
@@ -541,16 +544,20 @@ global.MoceanDungeons = function(ctx){
 
   function fire(){
     if(!active || !M || M.fireCd > 0) return;
-    M.fireCd = 16;
+    M.fireCd = 11;
     const a = player.displayAngle;
     M.bubs.push({ x:player.x + Math.cos(a)*20, y:player.y + Math.sin(a)*20,
-                  vx:Math.cos(a)*12 + player.vx*0.3, vy:Math.sin(a)*12 + player.vy*0.3, life:75 });
+                  vx:Math.cos(a)*13 + player.vx*0.3, vy:Math.sin(a)*13 + player.vy*0.3, life:80 });
   }
 
   function stepGuard(e, dt){
-    const dx = e.tx - e.x, dy = e.ty - e.y, d = Math.hypot(dx, dy), step = e.speed*dt;
-    if(d > step){ e.x += dx/d*step; e.y += dy/d*step; return; }
-    e.x = e.tx; e.y = e.ty;
+    const dx = e.tx - e.x, dy = e.ty - e.y, d = Math.hypot(dx, dy);
+    if(d >= 16){
+      const ease = 1 - Math.pow(0.9, dt);                 // steer, don't snap: corners become gentle curves
+      e.vx += (dx/d*e.speed - e.vx)*ease; e.vy += (dy/d*e.speed - e.vy)*ease;
+      e.x += e.vx*dt; e.y += e.vy*dt;
+      return;
+    }
     const from = [e.cx, e.cy];
     e.cx = e.ncx; e.cy = e.ncy;
     let opts = M.m.open[e.cy][e.cx];
@@ -586,8 +593,8 @@ global.MoceanDungeons = function(ctx){
     setTimeout(()=>{ if(active && M && M.d === d) exitDungeon(); }, 3200);
   }
 
-  const BOSS_ATK = { crab:['charge','ring'], eel:['charge','charge','fan'], angler:['fan','charge'],
-                     kraken:['fan','ring'], shark:['charge','fan','ring'] };
+  const BOSS_ATK = { crab:['charge','ring'], eel:['charge','fan'], angler:['fan','charge'],
+                     kraken:['fan','ring'], shark:['charge','fan','fan','ring'] };
 
   function shoot(x, y, a, sp){ M.shots.push({ x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, life:240 }); }
 
@@ -602,33 +609,35 @@ global.MoceanDungeons = function(ctx){
       }
       return;
     }
-    const rage = b.hp < b.max*0.5 ? 1.35 : 1;
+    const rage = b.hp < b.max*0.5 ? 1.15 : 1;
     const x0 = A.x0*T + b.r, x1 = (A.x0 + A.w)*T - b.r, y0 = A.y0*T + b.r, y1 = (A.y0 + A.h)*T - b.r;
     const toP = Math.atan2(player.y - b.y, player.x - b.x);
     b.t -= dt;
     if(b.state === 'rest'){
       if(Math.hypot(b.tx - b.x, b.ty - b.y) < 24){ b.tx = rand(x0, x1); b.ty = rand(y0, y1); }
-      const a = Math.atan2(b.ty - b.y, b.tx - b.x);
-      b.x += Math.cos(a)*1.7*rage*dt; b.y += Math.sin(a)*1.7*rage*dt;
+      const a = Math.atan2(b.ty - b.y, b.tx - b.x), ease = 1 - Math.pow(0.96, dt);
+      b.vx += (Math.cos(a)*1.5*rage - b.vx)*ease; b.vy += (Math.sin(a)*1.5*rage - b.vy)*ease;
+      b.x += b.vx*dt; b.y += b.vy*dt;
       b.ang = lerpAngle(b.ang, toP, 0.05*dt);
-      if(b.t <= 0){ const l = BOSS_ATK[b.kind]; b.atk = l[randi(0, l.length-1)]; b.state = 'wind'; b.t = b.atk === 'charge' ? 42 : 32; }
+      if(b.t <= 0){ const l = BOSS_ATK[b.kind]; b.atk = l[randi(0, l.length-1)]; b.state = 'wind'; b.t = b.atk === 'charge' ? 62 : 45; }
     } else if(b.state === 'wind'){
       b.ang = lerpAngle(b.ang, toP, 0.2*dt);
+      b.vx *= Math.pow(0.9, dt); b.vy *= Math.pow(0.9, dt); b.x += b.vx*dt; b.y += b.vy*dt;
       if(b.t <= 0){
         if(b.atk === 'charge'){
-          b.state = 'charge'; b.t = 38;
-          b.vx = Math.cos(toP)*8.5*rage; b.vy = Math.sin(toP)*8.5*rage; b.ang = toP;
+          b.state = 'charge'; b.t = 34;
+          b.vx = Math.cos(toP)*6.5*rage; b.vy = Math.sin(toP)*6.5*rage; b.ang = toP;
         } else {
-          if(b.atk === 'ring'){ const n = 10; for(let i=0;i<n;i++) shoot(b.x, b.y, i/n*Math.PI*2 + b.ang, 3.2*rage); }
-          else { const n = rage > 1 ? 7 : 5; for(let i=0;i<n;i++) shoot(b.x, b.y, toP + (i - (n-1)/2)*0.28, 4.6*rage); }
-          b.state = 'rest'; b.t = rand(70, 110)/rage;
+          if(b.atk === 'ring'){ const n = 8; for(let i=0;i<n;i++) shoot(b.x, b.y, i/n*Math.PI*2 + b.ang, 2.4*rage); }
+          else { const n = rage > 1 ? 5 : 3; for(let i=0;i<n;i++) shoot(b.x, b.y, toP + (i - (n-1)/2)*0.3, 3.4*rage); }
+          b.state = 'rest'; b.t = rand(110, 170)/rage;
         }
       }
     } else if(b.state === 'charge'){
       b.x += b.vx*dt; b.y += b.vy*dt;
       const cx = clamp(b.x, x0, x1), cy = clamp(b.y, y0, y1);
       if(cx !== b.x || cy !== b.y){ b.x = cx; b.y = cy; b.t = 0; burstBubbles(b.x, b.y, 6); }
-      if(b.t <= 0){ b.state = 'rest'; b.t = 60/rage; }
+      if(b.t <= 0){ b.state = 'rest'; b.t = 100/rage; }
     }
   }
 
@@ -659,7 +668,7 @@ global.MoceanDungeons = function(ctx){
       const p = M.bubs[i]; if(!p) continue;
       p.x += p.vx*dt; p.y += p.vy*dt; p.life -= dt;
       let dead = p.life <= 0 || isWall(Math.floor(p.x/T), Math.floor(p.y/T));
-      if(!dead && b.active && !b.dead && Math.hypot(p.x - b.x, p.y - b.y) < b.r + 8){
+      if(!dead && b.active && !b.dead && Math.hypot(p.x - b.x, p.y - b.y) < b.r + 12){
         dead = true; b.hp--; b.hit = 6;
         if(b.hp <= 0) killBoss();
       }
@@ -704,7 +713,7 @@ global.MoceanDungeons = function(ctx){
 
     const target = save.glow && has('glow') ? 620 : 330;
     lightR += (target - lightR) * 0.06 * dt;
-    darkS.x = app.screen.width/2; darkS.y = app.screen.height/2 + player.bob;
+    darkS.x = app.screen.width/2 + view.ox; darkS.y = app.screen.height/2 + player.bob + view.oy;
     darkS.width = darkS.height = lightR / 0.085;
 
     drawEntities(now);
@@ -718,148 +727,162 @@ global.MoceanDungeons = function(ctx){
     if(key === caveHud._key) return;
     caveHud._key = key;
     caveHud.style.display = 'block';
-    caveHud.innerHTML = '<div class="hearts">' + '♥'.repeat(Math.max(0, M.php)) + '<span>' + '♥'.repeat(3 - Math.max(0, M.php)) + '</span></div>' +
+    caveHud.innerHTML = '<div class="hearts">' + '♥'.repeat(Math.max(0, M.php)) + '<span>' + '♥'.repeat(MAX_HP - Math.max(0, M.php)) + '</span></div>' +
       (showBoss ? `<div class="boss-name">${b.name}</div><div class="boss-bar"><div style="width:${Math.max(0, b.hp/b.max*100)}%"></div></div>` : '');
   }
 
   /* ---------------- sea-creature drawing (all vector, drawn each frame) ---------------- */
 
-  const poly = (g, pts, col, al)=>{ g.beginFill(col, al === undefined ? 1 : al); g.drawPolygon(pts.flat()); g.endFill(); };
+  /* ---------- wireframe sea creatures: stroked outlines only, like the open-ocean fish ---------- */
 
-  function drawEnemy(e, now){
-    const g = entG, x = e.x, y = e.y, t = now*0.004 + e.ph;
-    const dx = e.tx - e.x, dy = e.ty - e.y;
-    if(dx*dx + dy*dy > 1) e.dir = Math.atan2(dy, dx);
-    const c = Math.cos(e.dir), s = Math.sin(e.dir);
-    const L = (u, v)=> [x + u*c - v*s, y + u*s + v*c];
-    g.lineStyle(0);
-    switch(e.kind){
-      case 'jelly':
-        g.beginFill(0xd59bff, 0.8); g.drawEllipse(x, y - 6, 24, 17); g.endFill();
-        g.beginFill(0xffffff, 0.5); g.drawCircle(x - 7, y - 10, 3); g.endFill();
-        g.lineStyle(3, 0xf0c8ff, 0.8);
-        for(let i=-2;i<=2;i++){ g.moveTo(x + i*8, y + 6); g.lineTo(x + i*8 + Math.sin(t + i)*5, y + 20); g.lineTo(x + i*8 + Math.sin(t + i + 1)*6, y + 34); }
-        break;
-      case 'urchin':
-        g.lineStyle(3, 0x3a1a5a);
-        for(let i=0;i<12;i++){ const a = i/12*Math.PI*2 + t*0.2; g.moveTo(x + Math.cos(a)*10, y + Math.sin(a)*10); g.lineTo(x + Math.cos(a)*28, y + Math.sin(a)*28); }
-        g.lineStyle(0); g.beginFill(0x6a2e9a); g.drawCircle(x, y, 15); g.endFill();
-        g.beginFill(0xff6bd5); g.drawCircle(x, y, 4); g.endFill();
-        break;
-      case 'crab':
-        g.lineStyle(3, 0xb8452e);
-        for(let i=0;i<3;i++) for(const sd of [-1,1]){ const w = Math.sin(t*3 + i)*3; g.moveTo(...L(-8 + i*8, sd*10)); g.lineTo(...L(-12 + i*8, sd*(22 + w))); }
-        g.moveTo(...L(16, 8)); g.lineTo(...L(26, 16)); g.moveTo(...L(16, -8)); g.lineTo(...L(26, -16));
-        g.lineStyle(0); g.beginFill(0xe8573a); g.drawEllipse(x, y, 22, 16); g.endFill();
-        g.beginFill(0xff7a5a); g.drawCircle(...L(28, 17), 8); g.drawCircle(...L(28, -17), 8); g.endFill();
-        g.beginFill(0xffffff); g.drawCircle(...L(15, 6), 3); g.drawCircle(...L(15, -6), 3); g.endFill();
-        break;
-      case 'puffer':
-        g.lineStyle(2, 0x9a7a1a);
-        for(let i=0;i<10;i++){ const a = i/10*Math.PI*2; g.moveTo(...L(Math.cos(a)*19, Math.sin(a)*19)); g.lineTo(...L(Math.cos(a)*27, Math.sin(a)*27)); }
-        g.lineStyle(0); poly(g, [L(-18, 0), L(-34, -9 + Math.sin(t*4)*3), L(-34, 9 + Math.sin(t*4)*3)], 0xffb347);
-        g.beginFill(0xffd45e); g.drawCircle(x, y, 20); g.endFill();
-        g.beginFill(0xfff0bd); g.drawEllipse(...L(0, 8), 14, 8); g.endFill();
-        g.beginFill(0xffffff); g.drawCircle(...L(10, -6), 5); g.endFill();
-        g.beginFill(0x000000); g.drawCircle(...L(11, -6), 2.4); g.endFill();
-        break;
-      case 'eel': {
-        for(let i=0;i<9;i++){
-          const p = L(-i*10, Math.sin(t*2 - i*0.7)*6);
-          g.beginFill(i%2 ? 0x4fb06a : 0x6fd08a); g.drawCircle(p[0], p[1], 9 - i*0.7); g.endFill();
+  const PAL = {
+    crab:[0xff8a5c,0xffd0a8], urchin:[0xb07aff,0xff9bd2], eel:[0x6fe0a0,0xd5ff9b], puffer:[0xffd45e,0xfff0bd],
+    jelly:[0xd59bff,0xffc8ff], angler:[0x8fa8d8,0x88ff44], kraken:[0xd07ad8,0xffc8ff]
+  };
+
+  // One definition per species, in unit coordinates (+u = forward). S scales it: ~20 for guardians, ~55 for bosses.
+  function drawCreature(g, kind, x, y, ang, S, t, flash){
+    const c = Math.cos(ang), sn = Math.sin(ang), pal = PAL[kind];
+    const body = flash ? 0xffffff : pal[0], acc = flash ? 0xffffff : pal[1];
+    const P = (u, v)=> [x + (u*c - v*sn)*S, y + (u*sn + v*c)*S];
+    const W = Math.max(1.7, S*0.085);
+    const line = (w, col, al)=> g.lineStyle({ width:w, color:col, alpha: al === undefined ? 1 : al, ...ROUND });
+    const path = (pts)=> pts.forEach((p, i)=> i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1]));
+    const loop = (pts)=> { path(pts); g.lineTo(pts[0][0], pts[0][1]); };
+    const oval = (u0, v0, rx, ry, n)=> { const pts = []; n = n || 22;
+      for(let i=0;i<n;i++){ const a = i/n*Math.PI*2; pts.push(P(u0 + Math.cos(a)*rx, v0 + Math.sin(a)*ry)); } loop(pts); };
+    const quad = (a, b)=> g.quadraticCurveTo(a[0], a[1], b[0], b[1]);
+    const dot = (u, v, r, col, al)=> { const p = P(u, v); g.lineStyle(0); g.beginFill(col, al === undefined ? 1 : al); g.drawCircle(p[0], p[1], r); g.endFill(); };
+    const eye = (u, v, r)=> { const p = P(u, v); line(Math.max(1.2, W*0.55), acc); g.drawCircle(p[0], p[1], r); dot(u + 0.03, v, Math.max(1.2, r*0.45), acc); };
+
+    switch(kind){
+      case 'crab': {
+        line(W, body); oval(0, 0, 0.9, 0.6);
+        line(W*0.7, body);
+        for(let i=0;i<3;i++) for(const sd of [-1,1]){
+          const sw = Math.sin(t*3 + i*1.3 + (sd > 0 ? 0 : Math.PI))*0.16, u = -0.5 + i*0.4;
+          path([P(u, sd*0.55), P(u + sw - 0.1, sd*1.0), P(u + sw*1.6 - 0.2, sd*1.38)]);
         }
-        g.beginFill(0xffe28a); g.drawCircle(...L(5, -4), 2.5); g.endFill();
+        for(const sd of [-1,1]){
+          const open = 0.22 + (Math.sin(t*2 + (sd > 0 ? 0 : 1.6)) + 1)*0.12;
+          line(W*0.9, body); path([P(0.7, sd*0.42), P(1.15, sd*0.78)]);
+          line(W, acc);
+          path([P(1.15, sd*0.78), P(1.6, sd*(0.78 - open)), P(1.9, sd*(0.62 - open*0.5))]);
+          path([P(1.15, sd*0.78), P(1.5, sd*(0.78 + open)), P(1.82, sd*(0.95 + open*0.4))]);
+          line(W*0.6, body); path([P(0.78, sd*0.2), P(0.92, sd*0.32)]); dot(0.95, sd*0.34, Math.max(1.5, S*0.07), acc);
+        }
         break;
       }
-      case 'angler':
-        poly(g, [L(-16, 0), L(-32, -10), L(-32, 10)], 0x1a2640);
-        g.beginFill(0x2a3a5a); g.drawCircle(x, y, 19); g.endFill();
-        g.lineStyle(2, 0x2a3a5a); g.moveTo(...L(8, -16)); g.quadraticCurveTo(...L(16, -34), ...L(28, -28));
-        g.lineStyle(0);
-        g.beginFill(0xffe28a, 0.3); g.drawCircle(...L(28, -28), 12 + Math.sin(t*2)*2); g.endFill();
-        g.beginFill(0xfff3b0); g.drawCircle(...L(28, -28), 5); g.endFill();
-        for(let i=-1;i<=1;i++) poly(g, [L(17, i*5 - 2), L(24, i*5), L(17, i*5 + 2)], 0xffffff);
-        g.beginFill(0xffffff); g.drawCircle(...L(8, -6), 4); g.endFill();
-        g.beginFill(0x000000); g.drawCircle(...L(9, -6), 2); g.endFill();
+      case 'urchin': {
+        const rot = t*0.15;
+        line(W, body); oval(0, 0, 0.5, 0.5, 16);
+        for(let i=0;i<14;i++){
+          const a = rot + i/14*Math.PI*2, l2 = (i%2 ? 0.85 : 1.2) + Math.sin(t*2 + i)*0.05;
+          line(W*0.6, i%2 ? acc : body);
+          path([P(Math.cos(a)*0.5, Math.sin(a)*0.5), P(Math.cos(a)*l2, Math.sin(a)*l2)]);
+        }
+        dot(0, 0, Math.max(2, S*0.11), acc, 0.9);
         break;
+      }
+      case 'eel': {
+        const N = S > 30 ? 16 : 10, seg = S > 30 ? 0.26 : 0.3, top = [], bot = [], fin = [];
+        for(let i=0;i<=N;i++){
+          const f = i/N, u = 0.55 - i*seg, v = Math.sin(t*2 - i*0.55)*0.2*(0.3 + f), w = 0.28*(1 - f*0.85) + 0.02;
+          top.push(P(u, v - w)); bot.push(P(u, v + w)); fin.push(P(u - 0.06, v - w - 0.16));
+        }
+        line(W, body); path(top); path(bot);
+        g.moveTo(top[0][0], top[0][1]); quad(P(1.1, 0), bot[0]);
+        line(W*0.55, acc, 0.8);
+        for(let i=1;i<N;i+=2) path([top[i], fin[i]]);
+        line(W*0.6, acc); path([P(0.55, -0.1), P(0.95, -0.03)]); path([P(0.55, 0.1), P(0.95, 0.03)]);
+        eye(0.3, -0.12, Math.max(1.8, S*0.075));
+        break;
+      }
+      case 'puffer': {
+        line(W, body); oval(0, 0, 0.95, 0.8, 20);
+        for(let i=0;i<10;i++){
+          const a = i/10*Math.PI*2 + 0.15;
+          line(W*0.55, acc); path([P(Math.cos(a)*0.95, Math.sin(a)*0.8), P(Math.cos(a)*1.3, Math.sin(a)*1.1)]);
+        }
+        const wag = Math.sin(t*4)*0.2;
+        line(W, body); path([P(-0.95, 0), P(-1.5, -0.4 + wag), P(-1.28, wag*0.5), P(-1.5, 0.4 + wag), P(-0.95, 0)]);
+        line(W*0.7, acc); path([P(0.1, 0.5), P(-0.2, 0.95 + Math.sin(t*5)*0.1), P(-0.32, 0.45)]);
+        path([P(0.95, 0.12), P(0.78, 0.14)]);
+        eye(0.5, -0.25, Math.max(2, S*0.15));
+        break;
+      }
+      case 'jelly': {
+        const p = 1 + Math.sin(t*2.5)*0.15;
+        line(W, body, 0.95);
+        g.moveTo(...P(0, -p)); quad(P(1.0, -0.8*p), P(1.0, 0)); quad(P(1.0, 0.8*p), P(0, p)); quad(P(0.2, 0), P(0, -p));
+        line(W*0.5, acc, 0.5); g.moveTo(...P(0.1, -0.55*p)); quad(P(0.55, 0), P(0.1, 0.55*p));
+        for(let i=0;i<5;i++){
+          const v0 = -0.7 + i*0.35;
+          line(W*0.7, body, 0.65); g.moveTo(...P(0.05, v0));
+          for(let j=1;j<=4;j++) g.lineTo(...P(0.05 - j*0.5, v0 + Math.sin(t*3 + i + j)*0.12*j));
+        }
+        line(W*1.0, acc, 0.6);
+        for(const sd of [-1,1]){ g.moveTo(...P(0, sd*0.18)); for(let j=1;j<=3;j++) g.lineTo(...P(-j*0.5, sd*0.18 + Math.sin(t*2.4 + j + sd)*0.14*j)); }
+        break;
+      }
+      case 'angler': {
+        line(W, body);
+        g.moveTo(...P(1.0, 0.15)); quad(P(0.9, -0.9), P(-0.2, -0.85)); quad(P(-1, -0.6), P(-1, 0)); quad(P(-1, 0.6), P(-0.1, 0.8)); quad(P(0.65, 0.8), P(0.95, 0.4));
+        const wag = Math.sin(t*3)*0.18;
+        path([P(-1, 0), P(-1.6, -0.45 + wag), P(-1.38, wag*0.4), P(-1.6, 0.45 + wag), P(-1, 0)]);
+        line(W*0.7, acc); path([P(1.0, 0.15), P(0.3, 0.3)]);
+        for(let k=0;k<5;k++) path([P(0.95 - k*0.14, 0.16 + k*0.017), P(0.9 - k*0.14, 0.33 + k*0.017)]);
+        line(W*0.6, body); g.moveTo(...P(0.35, -0.75)); quad(P(0.7, -1.5 + Math.sin(t*2)*0.1), P(1.2, -1.1));
+        const lp = P(1.2, -1.1), halo = Math.max(3, S*0.2) + Math.sin(t*3)*S*0.03;
+        line(1.3, 0x88ff44, 0.5); g.drawCircle(lp[0], lp[1], halo);
+        dot(1.2, -1.1, Math.max(2.2, S*0.1), 0x88ff44, 0.95);
+        eye(0.5, -0.3, Math.max(2, S*0.16));
+        break;
+      }
+      case 'kraken': {
+        line(W, body); oval(0.05, 0, 1, 0.85, 26);
+        for(const sd of [-1,1]){ path([P(-0.6, sd*0.7), P(-1.1, sd*1.15), P(-0.95, sd*0.4)]); }
+        line(W*0.5, acc, 0.6); g.moveTo(...P(0.7, -0.55)); quad(P(-0.2, 0), P(0.7, 0.55));
+        for(let k=0;k<8;k++){
+          const v0 = (k - 3.5)*0.2;
+          line(W*(k%3 === 0 ? 0.95 : 0.65), k%2 ? body : acc, 0.9);
+          g.moveTo(...P(-0.9, v0));
+          for(let j=1;j<=8;j++) g.lineTo(...P(-0.9 - j*0.34, v0*(1 + j*0.2) + Math.sin(t*2 + j*0.7 + k)*0.16));
+        }
+        for(const sd of [-1,1]){ eye(0.5, sd*0.42, Math.max(2.5, S*0.2)); }
+        break;
+      }
     }
     g.lineStyle(0);
   }
 
+  function drawEnemy(e, now){
+    const t = now*0.004 + e.ph;
+    if(e.kind === 'jelly'){
+      drawCreature(entG, 'jelly', e.x, e.y + Math.sin(t*1.5)*3, -Math.PI/2 + Math.sin(t)*0.12, 22, t, false);
+      return;
+    }
+    const sp = Math.hypot(e.vx, e.vy);
+    if(sp > 0.05) e.dir = (e.dirSet ? lerpAngle(e.dir, Math.atan2(e.vy, e.vx), 0.15) : Math.atan2(e.vy, e.vx));
+    e.dirSet = true;
+    drawCreature(entG, e.kind, e.x, e.y + Math.sin(t*1.5)*2, e.dir || 0, 20, t, false);
+  }
+
   function drawBoss(b, now){
-    const g = entG, x = b.x, y = b.y, t = now*0.004;
-    const c = Math.cos(b.ang), s = Math.sin(b.ang);
-    const L = (u, v)=> [x + u*c - v*s, y + u*s + v*c];
-    g.lineStyle(0);
-    if(b.state === 'wind'){                           // telegraph
-      g.lineStyle(4, 0xff4a4a, 0.4 + 0.4*Math.sin(now*0.03));
-      g.drawCircle(x, y, b.r + 14); g.lineStyle(0);
+    const t = now*0.004, flash = b.hit > 0;
+    if(b.state === 'wind'){                                     // telegraph ring
+      entG.lineStyle(3, 0xff4a4a, 0.35 + 0.35*Math.sin(now*0.03));
+      entG.drawCircle(b.x, b.y, b.r + 16); entG.lineStyle(0);
     }
-    switch(b.kind){
-      case 'crab':
-        g.lineStyle(6, 0xa63a28);
-        for(let i=0;i<3;i++) for(const sd of [-1,1]){ const w = Math.sin(t*3 + i)*6; g.moveTo(...L(-24 + i*18, sd*30)); g.lineTo(...L(-30 + i*18, sd*(62 + w))); }
-        g.moveTo(...L(36, 24)); g.lineTo(...L(60, 40)); g.moveTo(...L(36, -24)); g.lineTo(...L(60, -40));
-        g.lineStyle(0); g.beginFill(0xc0392b); g.drawEllipse(x, y, 58, 44); g.endFill();
-        g.beginFill(0xe74c3c); g.drawEllipse(...L(-6, 0), 36, 26); g.endFill();
-        for(const sd of [-1,1]){
-          g.beginFill(0xe74c3c); g.drawCircle(...L(72, sd*44), 24); g.endFill();
-          poly(g, [L(88, sd*44), L(110, sd*30), L(104, sd*52)], 0xe74c3c);
-          g.beginFill(0xffffff); g.drawCircle(...L(44, sd*14), 7); g.endFill();
-          g.beginFill(0x000000); g.drawCircle(...L(47, sd*14), 3); g.endFill();
-        }
-        break;
-      case 'eel':
-        for(let i=0;i<16;i++){
-          const p = L(-i*20, Math.sin(t*2 - i*0.6)*14), r = 36 - i*1.8;
-          g.beginFill(i%2 ? 0x3f9a5a : 0x58b874); g.drawCircle(p[0], p[1], r); g.endFill();
-          if(i%3 === 1){ g.beginFill(0xffe28a, 0.8); g.drawCircle(p[0], p[1] - 4, r*0.25); g.endFill(); }
-        }
-        poly(g, [L(36, -8), L(62, -22), L(60, -2)], 0x2f7a46); poly(g, [L(36, 8), L(62, 22), L(60, 2)], 0x2f7a46);
-        for(let i=0;i<3;i++){ poly(g, [L(40 + i*6, -4), L(44 + i*6, 0), L(40 + i*6, 4)], 0xffffff); }
-        g.beginFill(0xffe28a); g.drawCircle(...L(16, -16), 7); g.drawCircle(...L(16, 16), 7); g.endFill();
-        g.beginFill(0x000000); g.drawCircle(...L(18, -16), 3); g.drawCircle(...L(18, 16), 3); g.endFill();
-        break;
-      case 'angler':
-        poly(g, [L(-52, 0), L(-92, -26 + Math.sin(t*3)*5), L(-92, 26 + Math.sin(t*3)*5)], 0x16223a);
-        g.beginFill(0x1f2f4a); g.drawCircle(x, y, 58); g.endFill();
-        g.beginFill(0x2c4468); g.drawEllipse(...L(-6, 18), 42, 24); g.endFill();
-        g.lineStyle(5, 0x1f2f4a); g.moveTo(...L(10, -50)); g.quadraticCurveTo(...L(40, -96), ...L(84, -74));
-        g.lineStyle(0);
-        g.beginFill(0xffe28a, 0.28); g.drawCircle(...L(84, -74), 30 + Math.sin(t*2)*4); g.endFill();
-        g.beginFill(0xfff3b0); g.drawCircle(...L(84, -74), 12); g.endFill();
-        for(let i=-3;i<=3;i++){ poly(g, [L(44, i*9 - 4), L(62, i*9), L(44, i*9 + 4)], 0xffffff); }
-        g.beginFill(0xffffff); g.drawCircle(...L(20, -24), 11); g.endFill();
-        g.beginFill(0xff4a4a); g.drawCircle(...L(23, -24), 5); g.endFill();
-        break;
-      case 'kraken':
-        for(let k=0;k<8;k++){
-          const v0 = (k - 3.5)*12;
-          g.lineStyle(11, k%2 ? 0x9a3f96 : 0xb350ae);
-          g.moveTo(...L(-28, v0));
-          for(let j=1;j<=7;j++) g.lineTo(...L(-28 - j*18, v0*(1 + j*0.25) + Math.sin(t*2 + j*0.8 + k)*12));
-        }
-        g.lineStyle(0); g.beginFill(0x8e3a8a); g.drawEllipse(x, y, 62, 52); g.endFill();
-        g.beginFill(0xc060bd, 0.5); g.drawEllipse(...L(-14, -14), 36, 18); g.endFill();
-        for(const sd of [-1,1]){
-          g.beginFill(0xffe28a); g.drawCircle(...L(24, sd*24), 12); g.endFill();
-          g.beginFill(0x000000); g.drawEllipse(...L(26, sd*24), 3, 9); g.endFill();
-        }
-        break;
-      case 'shark': {
-        const wag = Math.sin(t*3)*10;
-        poly(g, [L(-84, 0), L(-124, -34 + wag), L(-110, 0 + wag*0.5), L(-124, 34 + wag)], 0x6a7886);
-        poly(g, [L(80, 0), L(34, -30), L(-44, -26), L(-88, -7), L(-88, 7), L(-44, 26), L(34, 30)], 0x7d8b99);
-        poly(g, [L(70, 4), L(30, 28), L(-44, 24), L(-80, 7), L(-20, 10)], 0xdfe6ec, 0.9);
-        poly(g, [L(6, -28), L(-22, -66), L(-34, -26)], 0x6a7886);
-        poly(g, [L(10, 24), L(-14, 56), L(-24, 22)], 0x6a7886);
-        for(let i=0;i<5;i++) poly(g, [L(46 + i*5, 6), L(49 + i*5, 14), L(52 + i*5, 6)], 0xffffff);
-        g.beginFill(0x000000); g.drawCircle(...L(52, -10), 5); g.endFill();
-        g.lineStyle(2, 0x3a4552); for(let i=0;i<3;i++){ g.moveTo(...L(22 - i*4, -4 + i*5)); g.lineTo(...L(14 - i*4, -8 + i*5)); } g.lineStyle(0);
-        break;
-      }
+    if(b.kind === 'shark'){
+      bossG.visible = true; bossG.x = b.x; bossG.y = b.y; bossG.rotation = b.ang;
+      const cols = flash ? { body:0xffffff, fin:0xffffff } : SHARK_COLORS;
+      drawFishShape(bossG, b.r*0.9, cols, t*3.2, b.state === 'charge' ? 1 : 0.45, Math.sin(t)*0.2);
+      return;
     }
-    if(b.hit > 0){ g.beginFill(0xffffff, 0.4); g.drawCircle(x, y, b.r + 6); g.endFill(); }
+    bossG.visible = false;
+    const S = { crab:0.8, eel:1.05, angler:0.95, kraken:0.95 }[b.kind]*b.r;
+    drawCreature(entG, b.kind, b.x, b.y, b.ang, S, t, flash);
   }
 
   function drawEntities(now){
@@ -871,7 +894,7 @@ global.MoceanDungeons = function(ctx){
     entG.lineStyle(0);
     for(const p of M.pearls){
       if(p.got) continue;
-      entG.beginFill(0xffffff, 0.9); entG.drawCircle(p.x, p.y, 8); entG.endFill();
+      entG.beginFill(0xffffff, 0.9); entG.drawCircle(p.x, p.y, 6); entG.endFill();
       entG.beginFill(d.accent, 0.25); entG.drawCircle(p.x, p.y, 16 + Math.sin(now*0.005 + p.x)*3); entG.endFill();
     }
     if(M.orbOn){
@@ -881,13 +904,13 @@ global.MoceanDungeons = function(ctx){
       entG.lineStyle(3, d.accent, 0.9); entG.drawCircle(o.x, o.y, 26); entG.lineStyle(0);
     }
     for(const e of M.guards) drawEnemy(e, now);
-    if(!M.boss.dead) drawBoss(M.boss, now);
+    if(!M.boss.dead) drawBoss(M.boss, now); else bossG.visible = false;
     for(const p of M.shots){
-      entG.beginFill(0x1a0f2e, 0.95); entG.drawCircle(p.x, p.y, 11); entG.endFill();
-      entG.beginFill(0xff6b6b, 0.9); entG.drawCircle(p.x, p.y, 5); entG.endFill();
+      entG.lineStyle({ width:2.5, color:0xff6b6b, alpha:0.95, ...ROUND }); entG.drawCircle(p.x, p.y, 10);
+      entG.lineStyle(0); entG.beginFill(0xffb3b3, 0.9); entG.drawCircle(p.x, p.y, 3.5); entG.endFill();
     }
     entG.lineStyle(2, 0xcff6ff, 0.9);
-    for(const p of M.bubs){ entG.beginFill(0x9be8ff, 0.25); entG.drawCircle(p.x, p.y, 7); entG.endFill(); }
+    for(const p of M.bubs){ entG.drawCircle(p.x, p.y, 7); }
     entG.lineStyle(0);
   }
 
