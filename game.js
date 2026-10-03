@@ -367,8 +367,11 @@ const player = {
   flipCounts: true,
   jumpCd: 0,
   boost: 0,
-  chomp: 0
+  chomp: 0,
+  inX: 0, inY: 0          // eased analog input (keys / touch ramp in and out)
 };
+// where the player sits on screen relative to centre (camera look-ahead, see main loop)
+const view = { ox: 0, oy: 0 };
 const PLAYER_COLORS = { body:0xff9d5c, fin:0xffd194 };
 
 function tryJump(){
@@ -394,10 +397,15 @@ function updatePlayer(dt){
 
   let ax = 0, ay = 0;
   if(gameStarted){
-    if(keys.left) ax -= player.accel;
-    if(keys.right) ax += player.accel;
-    if(keys.up) ay -= player.accel;
-    if(keys.down) ay += player.accel;
+    // ease the input so starts and stops feel like pushing through water, not a switch
+    const rx = (keys.right?1:0) - (keys.left?1:0), ry = (keys.down?1:0) - (keys.up?1:0);
+    const ease = Math.min(1, (rx||ry ? 0.2 : 0.12) * dt);
+    player.inX += (rx - player.inX) * ease;
+    player.inY += (ry - player.inY) * ease;
+    const mag = Math.hypot(player.inX, player.inY);
+    const nrm = mag > 1 ? 1/mag : 1;
+    ax = player.inX * nrm * player.accel;
+    ay = player.inY * nrm * player.accel;
   } else {
     const t = performance.now()*0.00006;
     const idleAccel = 0.34;
@@ -407,8 +415,6 @@ function updatePlayer(dt){
 
   const abilitySpeed = dungeons.speedMul();   // shapeshift form + dash
   ax *= abilitySpeed; ay *= abilitySpeed;
-  if(ax !== 0 && ay !== 0){ ax *= 0.78; ay *= 0.78; }
-
   const inAir = player.y < SURFACE_Y;
 
   if(inAir){
@@ -419,8 +425,17 @@ function updatePlayer(dt){
   player.vx += ax * dt;
   player.vy += ay * dt;
 
+  if(!inAir){
+    // ocean current + a faint buoyant bob
+    const cur = water.current(player.x, player.y, performance.now());
+    player.vx += cur.x * 0.03 * dt;
+    player.vy += (cur.y * 0.03 + Math.sin(performance.now()*0.0013)*0.004) * dt;
+  }
+
   if(inAir){
-    player.vx *= Math.pow(0.995, dt);
+    const airSp = Math.hypot(player.vx, player.vy);
+    const airDrag = Math.pow(1 - 0.0012 - airSp*0.0002, dt);   // quadratic-ish air drag
+    player.vx *= airDrag; player.vy *= Math.pow(1 - airSp*0.00012, dt);
   } else {
     // While a jump is charging out of the water, vertical drag is almost off
     const vDrag = player.boost > 0 ? 0.985 : player.drag;
@@ -447,7 +462,9 @@ function updatePlayer(dt){
   if(player.y > floorLimit){
     const slope = (floorY(player.x + 4) - floorY(player.x - 4)) / 8;
     player.y = floorLimit;
-    if(player.vy > 0) player.vy = 0;
+    if(player.vy > 1.5){ water.kick(player.x, floorLimit + 8, player.vy*0.5); player.vy *= -0.25; }
+    else if(player.vy > 0) player.vy = 0;
+    if(Math.abs(player.vx) > 2.5 && Math.random() < 0.3) water.kick(player.x, floorLimit + 8, 1);
     if(slope * player.vx > 0) player.vx *= Math.pow(0.9, dt);   // uphill scrape slows you
   }
 
@@ -455,6 +472,11 @@ function updatePlayer(dt){
 
   if(wasUnderwater !== nowUnderwater){
     spawnSplash(player.x, SURFACE_Y);
+    if(!wasUnderwater){          // diving back in: water resists, spray scales with impact
+      const impact = Math.abs(player.vy);
+      burstBubbles(player.x, SURFACE_Y + 10, Math.round(clamp(impact*1.4, 4, 20)));
+      player.vy *= 0.6; player.vx *= 0.88;
+    }
     if(wasUnderwater && !nowUnderwater && player.vy < -FLIP_SPEED_THRESHOLD && !player.flipping){
       player.flipping = true;
       player.flipProgress = 0;
@@ -683,9 +705,11 @@ function spawnBubble(nearPlayer){
 }
 
 function updateBubbles(dt){
+  const bn = performance.now();
   for(const b of bubbles){
-    b.y -= b.speed*dt;
-    b.x += Math.sin(performance.now()*0.001 + b.wobble)*0.15*dt;
+    b.y -= (b.speed*0.7 + b.r*0.12)*dt;                        // bigger bubbles rise faster
+    const c = water.current(b.x, b.y, bn);
+    b.x += (Math.sin(bn*0.002*(1 + b.r*0.1) + b.wobble)*0.22*b.r/3 + c.x*0.4)*dt;
   }
   bubbles = bubbles.filter(b => b.y > SURFACE_Y - 30);
 }
@@ -695,6 +719,10 @@ function redrawBubbles(){
   for(const b of bubbles){
     bubblesG.lineStyle(1.2, 0xdff6ff, b.bright ? 0.55 : 0.22);
     bubblesG.drawCircle(b.x, b.y, b.r);
+    if(b.r > 2.6){                                              // glint
+      bubblesG.lineStyle(1, 0xffffff, b.bright ? 0.6 : 0.3);
+      bubblesG.arc(b.x, b.y, b.r*0.62, Math.PI*1.1, Math.PI*1.6);
+    }
   }
 }
 
@@ -860,7 +888,15 @@ function trySpawn(dt){
 
 function destroyNpc(n){ creaturesLayer.removeChild(n.g); n.g.destroy(); }
 
+const BOTTOM_DWELLERS = { crab:1, starfish:1, seahub:1, isopod:1 };
 function updateNPCs(dt){
+  const cnow = performance.now();
+  for(const n of npcs){
+    if(BOTTOM_DWELLERS[n.type]) continue;
+    const c = water.current(n.x, n.y, cnow);
+    n.x += c.x*0.5*dt;                       // sea life is carried a little by the current
+    if(n.targetX !== undefined) n.targetX += c.x*0.5*dt;
+  }
   for(const n of npcs){
     if(n.type==='jelly') updateJelly(n, dt);
     else if(n.type==='crab') updateCrab(n, dt);
@@ -1586,8 +1622,13 @@ function updateHUD(){
 
 /* ============================= CAVES & ABILITIES (see dungeons.js) ============================= */
 
+const water = MoceanWater({
+  app, world, player, view, creaturesLayer, getDaylight, rand, clamp,
+  inCave: ()=> dungeons.active
+});
+
 const dungeons = MoceanDungeons({
-  app, world, player, keys, rand, randi, clamp, lerpAngle, floorY,
+  app, world, player, keys, view, rand, randi, clamp, lerpAngle, floorY,
   terrainG, bubblesG, playerG, PLAYER_COLORS, SHARK_COLORS, drawFishShape,
   addXP, popText, burstBubbles, playBlip,
   isStarted: ()=> gameStarted,
@@ -1633,7 +1674,8 @@ function positionPlayerGraphic(){
 window.addEventListener('resize', positionPlayerGraphic);
 positionPlayerGraphic();
 
-app.ticker.add((dt)=>{
+app.ticker.add((rawDt)=>{
+  const dt = Math.min(rawDt, 2.5);        // a hitch (tab switch, lag spike) never tunnels through physics
   updateTouchInput();
   const speed = updatePlayer(dt);
   if(!dungeons.active){
@@ -1652,8 +1694,13 @@ app.ticker.add((dt)=>{
   updateBubbles(dt);
   updateSplashes(dt);
 
-  world.x = -(player.x - app.screen.width/2);
-  world.y = -(player.y - app.screen.height/2) - player.bob;
+  // camera: eases ahead of the fish so fast swimming reveals more of what's coming
+  const lookX = clamp(player.vx*5, -48, 48), lookY = clamp(player.vy*4, -34, 34);
+  const camEase = 1 - Math.pow(0.9, dt);
+  view.ox += (-lookX - view.ox) * camEase;
+  view.oy += (-lookY - view.oy) * camEase;
+  world.x = -(player.x - app.screen.width/2) + view.ox;
+  world.y = -(player.y - app.screen.height/2) - player.bob + view.oy;
 
   const now = performance.now();
   if(!dungeons.active) drawSeafloorAndDecor(now);
@@ -1661,10 +1708,10 @@ app.ticker.add((dt)=>{
   redrawSplashes();
   if(!dungeons.active){
     drawSurfaceLine(now);
-    drawWaterOverlay(now);
   }
 
-  playerG.y = app.screen.height/2 + player.bob;
+  playerG.x = app.screen.width/2 + view.ox;
+  playerG.y = app.screen.height/2 + player.bob + view.oy;
   playerG.rotation = player.flipping
     ? player.displayAngle + player.flipProgress*Math.PI*2*player.flipDir
     : player.displayAngle;
@@ -1675,6 +1722,7 @@ app.ticker.add((dt)=>{
     drawSky(now);
     updateWaterBackground(now);
   }
+  water.update(dt, now, speed);
   updateHUD();
   updateDebugDisplay();
   updateClock();
