@@ -690,38 +690,92 @@ updateXPUI();
 /* ============================= BUBBLES ============================= */
 
 let bubbles = [];
+const BUBBLE_POP_FRAMES = 9;
+
+function makeBubble(x, y, r, speed, bright){
+  return { x, y, r, r0:r, speed, wobble:rand(0,Math.PI*2), wobSpeed:rand(0.8,1.5), bright, age:0, pop:0 };
+}
+
+// ambient bubbles rise up through the visible water; nearPlayer ones trail off the fish
 function spawnBubble(nearPlayer){
-  const x = nearPlayer
-    ? player.x + rand(-app.screen.width*0.6, app.screen.width*0.6)
-    : player.x + rand(-app.screen.width, app.screen.width);
-  bubbles.push({
-    x, y: floorY(x) - rand(0,20),
-    r: rand(1.5, 5.5),
-    speed: rand(0.4,1.3),
-    wobble: rand(0,Math.PI*2),
-    bright: nearPlayer
-  });
-  if(bubbles.length > 140) bubbles.shift();
+  if(dungeons.active) return;
+  const W = app.screen.width, H = app.screen.height;
+  let x, y;
+  if(nearPlayer){
+    const back = player.size*1.6;
+    x = player.x - Math.cos(player.displayAngle)*back + rand(-5,5);
+    y = player.y - Math.sin(player.displayAngle)*back + rand(-5,5);
+  } else {
+    x = player.x + rand(-W*0.75, W*0.75);
+    y = player.y + H*0.55 + rand(0, 80);          // just below the view, so it rises into sight
+  }
+  if(y < SURFACE_Y + 20 || y > floorY(x) - 4) return;
+  const r = nearPlayer ? rand(1.2, 3.2) : (Math.random() < 0.15 ? rand(4, 6.5) : rand(1.5, 3.8));
+  bubbles.push(makeBubble(x, y, r, rand(0.4, 1.3), nearPlayer));
+  if(bubbles.length > 260) bubbles.shift();
+}
+
+// vents on the seafloor puff little chains of bubbles
+function spawnVentBubbles(dt){
+  if(dungeons.active) return;
+  const W = app.screen.width, H = app.screen.height;
+  if(player.y + H*0.5 + 160 < floorY(player.x)) return;        // floor not near the view
+  const spacing = 540;
+  const first = Math.floor((player.x - W*0.7)/spacing), last = Math.floor((player.x + W*0.7)/spacing);
+  for(let i=first; i<=last; i++){
+    if(hash(i*7.31 + 2.2) > 0.5) continue;
+    const vx = i*spacing + hash(i*3.7)*200;
+    if(Math.random() < 0.09*dt){
+      const bx = vx + rand(-5,5);
+      bubbles.push(makeBubble(bx, floorY(bx) - 4, rand(1.2, 3.4), rand(0.5, 1.1), false));
+    }
+  }
 }
 
 function updateBubbles(dt){
   const bn = performance.now();
+  const W = app.screen.width, H = app.screen.height;
   for(const b of bubbles){
-    b.y -= (b.speed*0.7 + b.r*0.12)*dt;                        // bigger bubbles rise faster
+    b.age += dt;
+    if(b.pop > 0){ b.pop += dt; continue; }
+    b.y -= (b.speed*0.7 + b.r0*0.12)*dt;                       // bigger bubbles rise faster
+    b.r = Math.min(b.r0*1.45, b.r + b.r0*0.0007*dt);            // swell a little as pressure drops
     const c = water.current(b.x, b.y, bn);
-    b.x += (Math.sin(bn*0.002*(1 + b.r*0.1) + b.wobble)*0.22*b.r/3 + c.x*0.4)*dt;
+    const wig = Math.sin(bn*0.0045*b.wobSpeed + b.wobble)*0.3*(0.45 + b.r0*0.12);
+    b.x += (wig + c.x*0.4)*dt;
+    if(b.y <= SURFACE_Y) b.pop = 0.01;                          // reached the surface: pop
   }
-  bubbles = bubbles.filter(b => b.y > SURFACE_Y - 30);
+  bubbles = bubbles.filter(b => b.pop < BUBBLE_POP_FRAMES
+    && Math.abs(b.x - player.x) < W*1.5 && Math.abs(b.y - player.y) < H*1.5);
 }
 
 function redrawBubbles(){
   bubblesG.clear();
+  const bn = performance.now();
   for(const b of bubbles){
-    bubblesG.lineStyle(1.2, 0xdff6ff, b.bright ? 0.55 : 0.22);
-    bubblesG.drawCircle(b.x, b.y, b.r);
-    if(b.r > 2.6){                                              // glint
-      bubblesG.lineStyle(1, 0xffffff, b.bright ? 0.6 : 0.3);
-      bubblesG.arc(b.x, b.y, b.r*0.62, Math.PI*1.1, Math.PI*1.6);
+    if(b.pop > 0){                                              // surface pop: ring expands, spits droplets
+      const f = b.pop/BUBBLE_POP_FRAMES;
+      bubblesG.lineStyle(1.2, 0xffffff, (1 - f)*0.55);
+      bubblesG.drawCircle(b.x, SURFACE_Y, b.r*(1 + f*1.1));
+      for(let k=0;k<4;k++){
+        const a = -Math.PI*(0.15 + k*0.23);
+        bubblesG.moveTo(b.x + Math.cos(a)*b.r*(1+f), SURFACE_Y + Math.sin(a)*b.r*(1+f));
+        bubblesG.lineTo(b.x + Math.cos(a)*b.r*(1.6+f*2), SURFACE_Y + Math.sin(a)*b.r*(1.6+f*2));
+      }
+      continue;
+    }
+    const fade = Math.min(1, b.age/18);
+    const a = (b.bright ? 0.6 : 0.34)*fade;
+    const sq = Math.sin(bn*0.009*b.wobSpeed + b.wobble)*0.11;   // bubbles wobble between tall and wide
+    bubblesG.lineStyle(1.2, 0xdff6ff, a);
+    bubblesG.drawEllipse(b.x, b.y, b.r*(1 + sq), b.r*(1 - sq));
+    if(b.r > 2.2){                                              // glint arc + tiny reflection dot
+      bubblesG.lineStyle(1, 0xffffff, Math.min(1, a*1.3));
+      bubblesG.arc(b.x, b.y, b.r*0.66, Math.PI*1.1, Math.PI*1.55);
+      bubblesG.lineStyle(0);
+      bubblesG.beginFill(0xffffff, a*0.7);
+      bubblesG.drawCircle(b.x + b.r*0.38, b.y + b.r*0.36, Math.max(0.6, b.r*0.1));
+      bubblesG.endFill();
     }
   }
 }
@@ -732,29 +786,15 @@ let splashes = [];
 function spawnSplash(x, y){
   splashes.push({ x, y, t: 0, life: 30 });
   for(let i=0;i<9;i++){
-    bubbles.push({
-      x: x + rand(-12,12),
-      y: y - rand(0,8),
-      r: rand(1,3.2),
-      speed: rand(0.7,2.0),
-      wobble: rand(0,Math.PI*2),
-      bright: true
-    });
+    bubbles.push(makeBubble(x + rand(-12,12), y + rand(3,12), rand(1,3.2), rand(0.7,2.0), true));
   }
 }
 
 function burstBubbles(x, y, count){
   for(let i=0;i<count;i++){
-    bubbles.push({
-      x: x + rand(-14,14),
-      y: y + rand(-10,10),
-      r: rand(1.2,3.6),
-      speed: rand(0.8,2.2),
-      wobble: rand(0,Math.PI*2),
-      bright: true
-    });
+    bubbles.push(makeBubble(x + rand(-14,14), y + rand(-10,10), rand(1.2,3.6), rand(0.8,2.2), true));
   }
-  if(bubbles.length > 200) bubbles.splice(0, bubbles.length - 200);
+  if(bubbles.length > 260) bubbles.splice(0, bubbles.length - 260);
 }
 
 function updateSplashes(dt){
@@ -953,22 +993,54 @@ function updateNPCs(dt){
 function drawSeafloorAndDecor(time){
   terrainG.clear();
 
-  const left = player.x - app.screen.width/2 - 100;
-  const right = player.x + app.screen.width/2 + 100;
+  // cover exactly what the camera sees (incl. look-ahead offset), plus margin, all the way to the screen bottom
+  const left = -world.x - 100;
+  const right = -world.x + app.screen.width + 100;
+  const bottom = -world.y + app.screen.height + 200;
   const cellSize = 70;
   const firstCell = Math.floor(left/cellSize) - 1;
   const lastCell = Math.floor(right/cellSize) + 1;
 
-  terrainG.beginFill(0x5c4827);
-  terrainG.moveTo(left, floorY(left));
-  for(let wx = left; wx <= right; wx += 24){
-    terrainG.lineTo(wx, floorY(wx));
+  // layered sand: each band follows the floor contour but sits deeper and darker, down past the screen edge
+  const BANDS = [
+    { off:0,   color:0x6a5530 },
+    { off:34,  color:0x58451f },
+    { off:96,  color:0x45361a },
+    { off:210, color:0x332813 },
+    { off:420, color:0x211a0d }
+  ];
+  for(const band of BANDS){
+    terrainG.beginFill(band.color);
+    terrainG.moveTo(left, floorY(left) + band.off);
+    for(let wx = left; wx <= right; wx += 24){
+      terrainG.lineTo(wx, floorY(wx) + band.off + Math.sin(wx*0.013 + band.off)*band.off*0.06);
+    }
+    terrainG.lineTo(right, bottom);
+    terrainG.lineTo(left, bottom);
+    terrainG.closePath();
+    terrainG.endFill();
   }
-  terrainG.lineTo(right, 8500);
-  terrainG.lineTo(left, 8500);
-  terrainG.closePath();
-  terrainG.endFill();
 
+  // sand ripples + pebbles (wireframe accents)
+  terrainG.lineStyle(1, 0xfff0c8, 0.12);
+  for(let r=1;r<=3;r++){
+    terrainG.moveTo(left, floorY(left) + r*14);
+    for(let wx = left; wx <= right; wx += 24){
+      terrainG.lineTo(wx, floorY(wx) + r*14 + Math.sin(wx*0.045 + r*2.1)*2.5);
+    }
+  }
+  terrainG.lineStyle(0);
+  for(let i=firstCell; i<=lastCell; i++){
+    for(let k=0;k<3;k++){
+      const px = i*cellSize + hash(i*5.17 + k*1.9)*cellSize;
+      const py = floorY(px) + 8 + hash(i*2.3 + k*7.1)*70;
+      terrainG.beginFill(0xfff0c8, 0.14);
+      terrainG.drawCircle(px, py, 1 + hash(i + k*3.3)*1.6);
+      terrainG.endFill();
+    }
+  }
+
+  // bright crest line
   terrainG.lineStyle(1.5, 0xfff0c8, 0.4);
   terrainG.moveTo(left, floorY(left));
   for(let wx = left; wx <= right; wx += 24){
@@ -1687,10 +1759,11 @@ app.ticker.add((rawDt)=>{
 
   bubbleSpawnTimer -= dt;
   if(bubbleSpawnTimer <= 0){
-    bubbleSpawnTimer = rand(4,10);
+    bubbleSpawnTimer = rand(7,15);
     spawnBubble(false);
-    if(speed > 0.5 && Math.random()<0.6) spawnBubble(true);
   }
+  if(!player.inAir && speed > 1.2 && Math.random() < 0.05*dt*Math.min(speed/3, 2)) spawnBubble(true);
+  spawnVentBubbles(dt);
   updateBubbles(dt);
   updateSplashes(dt);
 
