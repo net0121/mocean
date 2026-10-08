@@ -21,6 +21,29 @@ global.MoceanFish = function(ctx){
     g.scale.y += (target - g.scale.y) * 0.16;
   }
 
+  /* A fin shaped like a leaf: pointed at both ends, fat in the middle, with a midrib.
+     (x0,y0) is where it attaches, (x1,y1) is the tip, w is how wide the blade bulges. */
+  function leafFin(g, x0, y0, x1, y1, w, color, fillAlpha, lineW){
+    const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy) || 1;
+    const nx = -dy/len, ny = dx/len;
+    const mx = x0 + dx*0.42, my = y0 + dy*0.42;           // widest point sits a little toward the base
+    const ax = mx + nx*w, ay = my + ny*w, bx = mx - nx*w, by = my - ny*w;
+    g.lineStyle(0);
+    g.beginFill(color, fillAlpha);
+    g.moveTo(x0, y0);
+    g.quadraticCurveTo(ax, ay, x1, y1);
+    g.quadraticCurveTo(bx, by, x0, y0);
+    g.closePath();
+    g.endFill();
+    g.lineStyle({ width: lineW, color, alpha:0.95, ...ROUND });       // crisp leaf outline
+    g.moveTo(x0, y0);
+    g.quadraticCurveTo(ax, ay, x1, y1);
+    g.quadraticCurveTo(bx, by, x0, y0);
+    g.lineStyle({ width: Math.max(0.8, lineW*0.6), color:0xffffff, alpha:0.4, ...ROUND });   // midrib
+    g.moveTo(x0, y0);
+    g.lineTo(x1, y1);
+  }
+
   /* Same simple wireframe body as before; only the motion changed.
      A wave now travels head -> tail (still at the nose, biggest at the tail), and the body,
      tail fin and dorsal/side lines all share it, so the tail stays attached while swimming. */
@@ -38,12 +61,22 @@ global.MoceanFish = function(ctx){
     const baseX = -s*0.85;
     const jointX = -s*1.3*stretch, jointY = rearOff + wave(1.1)*s*0.28;
     const tipX = -s*1.95*stretch,  tipY = jointY + wave(1.3)*s*0.34;
+    // tail: one big leaf whose midrib bends through the joint so it ripples with the swim wave
+    const finLine = Math.max(1.2, s*0.05);
+    g.lineStyle(0);
     g.beginFill(colors.fin, 0.92);
-    g.moveTo(baseX, rearOff - s*0.16);
-    g.quadraticCurveTo(jointX, jointY - s*0.24, tipX, tipY - s*0.05);
-    g.quadraticCurveTo(jointX, jointY + s*0.24, baseX, rearOff + s*0.16);
+    g.moveTo(baseX, rearOff);
+    g.quadraticCurveTo(jointX, jointY - s*0.46, tipX, tipY);
+    g.quadraticCurveTo(jointX, jointY + s*0.46, baseX, rearOff);
     g.closePath();
     g.endFill();
+    g.lineStyle({ width: finLine, color: colors.fin, ...ROUND });
+    g.moveTo(baseX, rearOff);
+    g.quadraticCurveTo(jointX, jointY - s*0.46, tipX, tipY);
+    g.quadraticCurveTo(jointX, jointY + s*0.46, baseX, rearOff);
+    g.lineStyle({ width: Math.max(0.8, finLine*0.6), color:0xffffff, alpha:0.4, ...ROUND });
+    g.moveTo(baseX, rearOff);
+    g.quadraticCurveTo(jointX, jointY, tipX, tipY);
 
     g.lineStyle({ width: Math.max(1.6, s*0.085), color: colors.body, ...ROUND });
     g.moveTo(s*1.0*stretch, 0);
@@ -51,16 +84,17 @@ global.MoceanFish = function(ctx){
     g.quadraticCurveTo(-s*1.05, rearOff, -s*0.85, s*0.30 - bank*s*0.15 + rearOff);
     g.quadraticCurveTo(s*0.5, s*0.62 + midOff*0.6, s*1.0*stretch, 0);
 
-    // dorsal ridge, flutters a beat behind the body
+    // dorsal fin: a leaf sweeping up and back, fluttering a beat behind the body
     const flutter = Math.sin(tailPhase*1.3 - 0.8) * 0.12;
-    g.lineStyle({ width: Math.max(1.4, s*0.07), color: colors.fin, ...ROUND });
-    g.moveTo(-s*0.22, -s*0.34 + midOff*0.5);
-    g.quadraticCurveTo(-s*0.05, -s*0.50 + flutter*s*0.10 + midOff*0.5, s*0.16, -s*0.36 + midOff*0.3);
+    leafFin(g, s*0.12, -s*0.40 + midOff*0.4,
+               -s*0.42, -s*0.86 + flutter*s*0.5 + midOff*0.5,
+               s*0.2, colors.fin, 0.55, finLine);
 
-    // side fin, flaps slowly
+    // side fin: a leaf that flaps slowly
     const row = Math.sin(tailPhase*0.9 + 1.4) * 0.4 + 0.2;
-    g.moveTo(s*0.18, s*0.12);
-    g.quadraticCurveTo(s*0.05 + row*s*0.1, s*0.55, -s*0.15, s*0.42 + row*s*0.15);
+    leafFin(g, s*0.2, s*0.14,
+               -s*0.22 + row*s*0.1, s*0.68 + row*s*0.15,
+               s*0.18, colors.fin, 0.55, finLine);
   }
 
   const SHARK_COLORS = { body:0x9aa6b2, fin:0xcfd8e0 };
