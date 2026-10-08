@@ -61,6 +61,7 @@ function rgbToHex(c){ return (c[0]<<16) + (c[1]<<8) + c[2]; }
 function rgbToCss(c){ return `rgb(${c[0]},${c[1]},${c[2]})`; }
 
 const ROUND = { cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND };
+const Bio = MoceanBiomes;      // sea biomes (see biomes.js)
 
 /* ============================= WORLD ============================= */
 
@@ -220,11 +221,13 @@ window.addEventListener('keyup', (e)=>{
   }
 });
 
-/* ============================= DRAG-BASED TOUCH CONTROLS ============================= */
+/* ============================= HOLD-TO-SWIM TOUCH CONTROLS ============================= */
 
+// Touch and hold anywhere: the fish swims toward your finger (relative to where the fish is on screen).
 const touchArea = document.getElementById('touch-area');
+const touchHintEl = document.querySelector('.touch-hint');
 let touchActive = false;
-let touchStartX = 0, touchStartY = 0;
+let touchId = null;
 let touchCurrentX = 0, touchCurrentY = 0;
 let touchKnob = null;
 
@@ -238,33 +241,29 @@ function createTouchKnob(){
 function updateTouchKnob(){
   if(!touchKnob) touchKnob = createTouchKnob();
   if(touchActive){
-    const rect = touchArea.getBoundingClientRect();
-    const centerX = rect.left + rect.width/2;
-    const centerY = rect.top + rect.height/2;
-    const dx = touchCurrentX - touchStartX;
-    const dy = touchCurrentY - touchStartY;
-    const maxDist = 60;
-    const dist = Math.min(Math.hypot(dx, dy), maxDist);
-    const angle = Math.atan2(dy, dx);
-    const knobX = centerX + Math.cos(angle) * dist;
-    const knobY = centerY + Math.sin(angle) * dist;
-    touchKnob.style.left = knobX + 'px';
-    touchKnob.style.top = knobY + 'px';
+    touchKnob.style.left = touchCurrentX + 'px';
+    touchKnob.style.top = touchCurrentY + 'px';
     touchKnob.style.opacity = '1';
   } else {
     touchKnob.style.opacity = '0';
   }
 }
 
+function findTouch(list){
+  for(let i=0;i<list.length;i++) if(list[i].identifier === touchId) return list[i];
+  return null;
+}
+
 function handleTouchStart(e){
   if(!gameStarted) return;
   e.preventDefault();
-  const touch = e.touches[0];
+  if(touchActive) return;                       // one steering finger at a time
+  const touch = e.changedTouches[0];
   touchActive = true;
-  touchStartX = touch.clientX;
-  touchStartY = touch.clientY;
+  touchId = touch.identifier;
   touchCurrentX = touch.clientX;
   touchCurrentY = touch.clientY;
+  if(touchHintEl) touchHintEl.style.opacity = '0';
   scheduleHideInstructions(8000);
   updateTouchKnob();
 }
@@ -272,20 +271,30 @@ function handleTouchStart(e){
 function handleTouchMove(e){
   if(!touchActive) return;
   e.preventDefault();
-  const touch = e.touches[0];
+  const touch = findTouch(e.changedTouches);
+  if(!touch) return;
   touchCurrentX = touch.clientX;
   touchCurrentY = touch.clientY;
   updateTouchKnob();
 }
 
 function handleTouchEnd(e){
+  if(!touchActive) return;
+  if(!findTouch(e.changedTouches)) return;
   touchActive = false;
+  touchId = null;
+  keys.left = keys.right = keys.up = keys.down = false;
   updateTouchKnob();
 }
 
 const jumpButtonEl = document.getElementById('jump-button');
 if(jumpButtonEl){
-  jumpButtonEl.addEventListener('pointerdown', (e)=>{ e.preventDefault(); tryJump(); });
+  // holding the button keeps "space" down: auto-fires bubbles in caves, glides with Sea Wings
+  const releaseJump = ()=>{ keys.space = false; };
+  jumpButtonEl.addEventListener('pointerdown', (e)=>{ e.preventDefault(); keys.space = true; tryJump(); });
+  jumpButtonEl.addEventListener('pointerup', releaseJump);
+  jumpButtonEl.addEventListener('pointercancel', releaseJump);
+  jumpButtonEl.addEventListener('pointerleave', releaseJump);
 }
 
 touchArea.addEventListener('touchstart', handleTouchStart, {passive:false});
@@ -295,13 +304,46 @@ touchArea.addEventListener('touchcancel', handleTouchEnd, {passive:false});
 
 function updateTouchInput(){
   if(!touchActive) return;
-  const dx = touchCurrentX - touchStartX;
-  const dy = touchCurrentY - touchStartY;
-  const threshold = 12;
-  keys.left = dx < -threshold;
-  keys.right = dx > threshold;
-  keys.up = dy < -threshold;
-  keys.down = dy > threshold;
+  // direction from the fish (where it is drawn on screen) to the finger; re-read every frame so it keeps up as you move
+  const fx = app.screen.width/2 + view.ox, fy = app.screen.height/2 + player.bob + view.oy;
+  const dx = touchCurrentX - fx, dy = touchCurrentY - fy;
+  const len = Math.hypot(dx, dy);
+  if(len < 18){ keys.left = keys.right = keys.up = keys.down = false; return; }   // finger right on the fish: coast
+  const nx = dx/len, ny = dy/len, t = 0.38;
+  keys.right = nx > t;
+  keys.left = nx < -t;
+  keys.down = ny > t;
+  keys.up = ny < -t;
+}
+
+/* ============================= FULLSCREEN ============================= */
+
+const fsBtn = document.getElementById('fullscreen-button');
+const fsRoot = document.documentElement;
+const fsRequest = fsRoot.requestFullscreen || fsRoot.webkitRequestFullscreen;
+const fsExit = document.exitFullscreen || document.webkitExitFullscreen;
+const isFullscreen = ()=> !!(document.fullscreenElement || document.webkitFullscreenElement);
+
+function updateFullscreenButton(){
+  fsBtn.textContent = isFullscreen() ? '✕' : '⛶';
+  fsBtn.title = isFullscreen() ? 'Exit fullscreen' : 'Fullscreen';
+}
+
+if(fsBtn){
+  if(!fsRequest){
+    fsBtn.style.display = 'none';          // e.g. iPhone Safari has no fullscreen API for pages
+  } else {
+    fsBtn.addEventListener('click', ()=>{
+      try{
+        const p = isFullscreen() ? fsExit.call(document) : fsRequest.call(fsRoot);
+        if(p && p.catch) p.catch(()=>{});
+      }catch(err){}
+      fsBtn.blur();                         // so Space/Enter in the game never re-triggers it
+    });
+    document.addEventListener('fullscreenchange', updateFullscreenButton);
+    document.addEventListener('webkitfullscreenchange', updateFullscreenButton);
+    updateFullscreenButton();
+  }
 }
 
 /* ============================= CREATURE HOVER TOOLTIP ============================= */
@@ -646,7 +688,7 @@ function checkEating(){
   const effLevel = progress.level + dungeons.levelBonus();   // shark form eats bigger fish
   const mouthX = player.x + Math.cos(player.displayAngle)*formSize*0.55;
   const mouthY = player.y + Math.sin(player.displayAngle)*formSize*0.55;
-  const reach = formSize*0.85;
+  const reach = formSize*0.85*dungeons.eatMul();       // Pearl Magnet widens the bite
 
   // schools of small fish (each member is eaten individually)
   const school = EDIBLE.school;
@@ -723,7 +765,7 @@ function spawnVentBubbles(dt){
   const spacing = 540;
   const first = Math.floor((player.x - W*0.7)/spacing), last = Math.floor((player.x + W*0.7)/spacing);
   for(let i=first; i<=last; i++){
-    if(hash(i*7.31 + 2.2) > 0.5) continue;
+    if(hash(i*7.31 + 2.2) > Bio.ventRate(i*spacing)) continue;       // volcanic biomes are full of vents
     const vx = i*spacing + hash(i*3.7)*200;
     if(Math.random() < 0.09*dt){
       const bx = vx + rand(-5,5);
@@ -1001,28 +1043,22 @@ function drawSeafloorAndDecor(time){
   const firstCell = Math.floor(left/cellSize) - 1;
   const lastCell = Math.floor(right/cellSize) + 1;
 
-  // layered sand: each band follows the floor contour but sits deeper and darker, down past the screen edge
-  const BANDS = [
-    { off:0,   color:0x6a5530 },
-    { off:34,  color:0x58451f },
-    { off:96,  color:0x45361a },
-    { off:210, color:0x332813 },
-    { off:420, color:0x211a0d }
-  ];
-  for(const band of BANDS){
-    terrainG.beginFill(band.color);
-    terrainG.moveTo(left, floorY(left) + band.off);
-    for(let wx = left; wx <= right; wx += 24){
-      terrainG.lineTo(wx, floorY(wx) + band.off + Math.sin(wx*0.013 + band.off)*band.off*0.06);
+  // layered sand: each band follows the floor contour but sits deeper and darker, down past the screen edge.
+  // drawn in thin strips so the colour can change smoothly from one biome to the next
+  const BAND_OFFS = [0, 34, 96, 210, 420], STRIP = 24;
+  const bandEdge = (wx, off)=> floorY(wx) + off + Math.sin(wx*0.013 + off)*off*0.06;
+  BAND_OFFS.forEach((off, bi)=>{
+    for(let wx = left; wx < right; wx += STRIP){
+      const x2 = wx + STRIP;
+      terrainG.beginFill(Bio.bandColor(wx + STRIP/2, bi));
+      terrainG.drawPolygon([wx, bandEdge(wx, off), x2 + 1, bandEdge(x2, off), x2 + 1, bottom, wx, bottom]);
+      terrainG.endFill();
     }
-    terrainG.lineTo(right, bottom);
-    terrainG.lineTo(left, bottom);
-    terrainG.closePath();
-    terrainG.endFill();
-  }
+  });
+  const spark = Bio.sparkleAt(player.x);
 
   // sand ripples + pebbles (wireframe accents)
-  terrainG.lineStyle(1, 0xfff0c8, 0.12);
+  terrainG.lineStyle(1, spark, 0.12);
   for(let r=1;r<=3;r++){
     terrainG.moveTo(left, floorY(left) + r*14);
     for(let wx = left; wx <= right; wx += 24){
@@ -1034,14 +1070,14 @@ function drawSeafloorAndDecor(time){
     for(let k=0;k<3;k++){
       const px = i*cellSize + hash(i*5.17 + k*1.9)*cellSize;
       const py = floorY(px) + 8 + hash(i*2.3 + k*7.1)*70;
-      terrainG.beginFill(0xfff0c8, 0.14);
+      terrainG.beginFill(spark, 0.14);
       terrainG.drawCircle(px, py, 1 + hash(i + k*3.3)*1.6);
       terrainG.endFill();
     }
   }
 
   // bright crest line
-  terrainG.lineStyle(1.5, 0xfff0c8, 0.4);
+  terrainG.lineStyle(1.5, spark, 0.4);
   terrainG.moveTo(left, floorY(left));
   for(let wx = left; wx <= right; wx += 24){
     terrainG.lineTo(wx, floorY(wx));
@@ -1052,46 +1088,8 @@ function drawSeafloorAndDecor(time){
     const wx = i*cellSize + hash(i*2.91)*30;
     const fy = floorY(wx);
 
-    if(h < 0.30) drawSeaweed(wx, fy, hash(i*3.3), time);
-    else if(h < 0.45) drawRock(wx, fy, hash(i*4.1));
-    else if(h < 0.58) drawCoral(wx, fy, hash(i*5.7));
-  }
-}
-
-function drawSeaweed(wx, fy, seed, time){
-  const blades = 2 + Math.floor(seed*3);
-  const baseHue = 140 + seed*40;
-  for(let b=0; b<blades; b++){
-    const bx = wx + (b - blades/2)*5;
-    const height = 26 + seed*40 + b*4;
-    const sway = Math.sin(time*0.0012 + seed*10 + b) * 10;
-    terrainG.lineStyle(2, hslToHex(baseHue, 0.55, 0.38+b*0.04), 0.85);
-    terrainG.moveTo(bx, fy);
-    terrainG.quadraticCurveTo(bx + sway*0.5, fy - height*0.55, bx + sway, fy - height);
-  }
-}
-
-function drawRock(wx, fy, seed){
-  const s = 10 + seed*18;
-  terrainG.lineStyle(1.6, 0x969aaa, 0.7);
-  terrainG.moveTo(wx - s, fy);
-  terrainG.lineTo(wx - s*0.6, fy - s*0.7);
-  terrainG.lineTo(wx, fy - s*0.95);
-  terrainG.lineTo(wx + s*0.7, fy - s*0.5);
-  terrainG.lineTo(wx + s, fy);
-  terrainG.closePath();
-}
-
-function drawCoral(wx, fy, seed){
-  const branches = 3 + Math.floor(seed*3);
-  const hue = 10 + seed*40;
-  for(let i=0;i<branches;i++){
-    const ang = -Math.PI/2 + (i - branches/2)*0.4 + seed;
-    const len = 14 + seed*20;
-    terrainG.lineStyle(2, hslToHex(hue, 0.7, 0.6), 0.8);
-    terrainG.moveTo(wx, fy);
-    terrainG.lineTo(wx + Math.cos(ang)*len*0.6, fy + Math.sin(ang)*len*0.6);
-    terrainG.lineTo(wx + Math.cos(ang)*len, fy + Math.sin(ang)*len);
+    const kind = Bio.decorFor(Bio.at(wx), h);          // what grows here depends on the biome
+    if(kind) Bio.drawDecor(terrainG, kind, wx, fy, hash(i*3.3 + 0.7), time);
   }
 }
 
@@ -1240,7 +1238,8 @@ function updateWaterBackground(now){
   const startY = Math.max(0, surfY);            // first screen row that is water
 
   const day = getDaylight(now);
-  const br = (0.42 + 0.58*day) * options.brightness;
+  const br = (0.42 + 0.58*day) * options.brightness * Bio.lightAt(player.x);
+  const tint = Bio.tintAt(player.x);              // each biome colours the water differently
 
   const stops = [];
   let firstColor = null;
@@ -1249,7 +1248,7 @@ function updateWaterBackground(now){
     const sy = startY + (H - startY)*(i/N);
     const depthFrac = clamp((player.y + (sy - H/2)) / 8000, 0, 1);
     const c = colorAtDepthFraction(depthFrac);
-    const adj = [clamp(Math.round(c[0]*br),0,255), clamp(Math.round(c[1]*br),0,255), clamp(Math.round(c[2]*br),0,255)];
+    const adj = [clamp(Math.round(c[0]*br*tint[0]),0,255), clamp(Math.round(c[1]*br*tint[1]),0,255), clamp(Math.round(c[2]*br*tint[2]),0,255)];
     if(i === 0) firstColor = rgbToCss(adj);
     stops.push(`${rgbToCss(adj)} ${sy.toFixed(1)}px`);
   }
@@ -1481,7 +1480,7 @@ commandInputEl.addEventListener('keydown', (e)=>{
 const COMMAND_LIST = [
   'help','clear','depth','teleport','tp','speed','spawn','clearcreatures',
   'time','weather','flip','coords','fact','8ball','roll','coinflip','rename',
-  'level','xp','resetprogress','dungeon','cave'
+  'level','xp','resetprogress','dungeon','cave','biome'
 ];
 
 const FUN_FACTS = [
@@ -1554,6 +1553,20 @@ function runCommand(raw){
     case 'dungeon':
     case 'cave': {
       for(const [text, cls] of dungeons.command(args)) printLine(text, cls);
+      break;
+    }
+    case 'biome': case 'biomes': {
+      const n = parseInt(args[0], 10);
+      if(n >= 1 && n <= Bio.list.length){
+        if(dungeons.active) dungeons.command(['exit']);
+        const b = Bio.list[n-1];
+        player.x = b.start === -Infinity ? 0 : b.start + 900; player.y = 700; player.vx = player.vy = 0;
+        printLine(`Teleported to the ${b.name}.`, 'ok');
+      } else {
+        printLine('Biomes, west to east (/biome <1-' + Bio.list.length + '> teleports):', 'info');
+        Bio.list.forEach((b, i)=> printLine(`${i+1}. ${b.name}: caves ${b.caves[0]}-${b.caves[1]}, ` +
+          (b.start === -Infinity ? 'everything west of the first cave' : `starts ${Math.round(b.start/8)} m east`), Bio.at(player.x) === b ? 'ok' : 'info'));
+      }
       break;
     }
     case 'clear': {
@@ -1688,8 +1701,27 @@ window.addEventListener('keydown', (e)=>{
 
 const depthValEl = document.getElementById('depthVal');
 
+const biomeLabelEl = document.createElement('div');
+biomeLabelEl.id = 'biome-label';
+document.getElementById('hud').insertBefore(biomeLabelEl, document.getElementById('daynight-clock'));
+const biomeBannerEl = document.createElement('div');
+biomeBannerEl.id = 'biome-banner';
+biomeBannerEl.innerHTML = '<div class="bb-small">Entering</div><div class="bb-big"></div>';
+document.body.appendChild(biomeBannerEl);
+let lastBiome = Bio.at(player.x);
+
 function updateHUD(){
   depthValEl.textContent = dungeons.active ? dungeons.depth() : Math.max(0, Math.round((player.y - SURFACE_Y)/8));
+  if(dungeons.active){ biomeLabelEl.textContent = dungeons._state ? dungeons._state.d.name : ''; return; }
+  const b = Bio.at(player.x);
+  if(biomeLabelEl.textContent !== b.name) biomeLabelEl.textContent = b.name;
+  if(b !== lastBiome){
+    lastBiome = b;
+    if(gameStarted){
+      biomeBannerEl.children[1].textContent = b.name;
+      biomeBannerEl.classList.remove('show'); void biomeBannerEl.offsetWidth; biomeBannerEl.classList.add('show');
+    }
+  }
 }
 
 /* ============================= CAVES & ABILITIES (see dungeons.js) ============================= */
