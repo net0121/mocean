@@ -378,9 +378,28 @@ function hideHoverLabel(label){
 function attachHoverLabel(g, label, hitRadius){
   g.eventMode = 'static';
   g.cursor = 'pointer';
+  g._hoverLabel = label;
   g.hitArea = new PIXI.Circle(0, 0, hitRadius);
   g.on('pointerover', ()=> showHoverLabel(label));
   g.on('pointerout', ()=> hideHoverLabel(label));
+}
+
+// Pixi only reports hover when the mouse moves, so a creature that drifts under a still cursor
+// (or away from it) would leave a stale label. Re-test under the cursor every frame instead.
+let mouseSeen = false;
+window.addEventListener('pointermove', ()=>{ mouseSeen = true; }, { once:true });
+function refreshOceanHover(){
+  if(!mouseSeen || !gameStarted || dungeons.active){ return; }
+  try{
+    const r = app.view.getBoundingClientRect();
+    if(mouseScreen.x < r.left || mouseScreen.x > r.right || mouseScreen.y < r.top || mouseScreen.y > r.bottom) return;
+    const px = (mouseScreen.x - r.left) * app.screen.width / r.width;
+    const py = (mouseScreen.y - r.top) * app.screen.height / r.height;
+    const hit = app.renderer.events.rootBoundary.hitTest(px, py);
+    const label = hit && hit._hoverLabel;
+    if(label){ if(label !== hoverLabel) showHoverLabel(label); }
+    else if(hoverLabel) hideHoverLabel();
+  }catch(err){}
 }
 
 
@@ -648,6 +667,7 @@ function awardFlip(xp){ addXP(xp, 'Flip!'); }
 
 function resetProgress(){
   progress.level = 1; progress.xp = 0;
+  if(typeof dungeons !== 'undefined') dungeons.resetUpgrades();
   applyLevelStats(); updateXPUI(); saveProgress();
 }
 
@@ -1735,6 +1755,8 @@ const dungeons = MoceanDungeons({
   app, world, player, keys, view, rand, randi, clamp, lerpAngle, floorY,
   terrainG, bubblesG, playerG, PLAYER_COLORS, SHARK_COLORS, drawFishShape,
   addXP, popText, burstBubbles, playBlip,
+  getLevel: ()=> progress.level,
+  mouseScreen, showHoverLabel, hideHoverLabel,
   isStarted: ()=> gameStarted,
   // hide / show the open-ocean layers while the player is inside a cave
   hideWhenInside(inside){
@@ -1779,6 +1801,7 @@ window.addEventListener('resize', positionPlayerGraphic);
 positionPlayerGraphic();
 
 app.ticker.add((rawDt)=>{
+  if(dungeons.menuOpen) return;           // the level-up upgrade menu pauses the whole game
   const dt = Math.min(rawDt, 2.5);        // a hitch (tab switch, lag spike) never tunnels through physics
   updateTouchInput();
   const speed = updatePlayer(dt);
@@ -1828,6 +1851,7 @@ app.ticker.add((rawDt)=>{
     updateWaterBackground(now);
   }
   water.update(dt, now, speed);
+  refreshOceanHover();
   updateHUD();
   updateDebugDisplay();
   updateClock();
