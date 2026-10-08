@@ -376,30 +376,37 @@ function hideHoverLabel(label){
 }
 
 function attachHoverLabel(g, label, hitRadius){
-  g.eventMode = 'static';
-  g.cursor = 'pointer';
   g._hoverLabel = label;
-  g.hitArea = new PIXI.Circle(0, 0, hitRadius);
-  g.on('pointerover', ()=> showHoverLabel(label));
-  g.on('pointerout', ()=> hideHoverLabel(label));
+  g._hoverR = hitRadius;
 }
 
-// Pixi only reports hover when the mouse moves, so a creature that drifts under a still cursor
-// (or away from it) would leave a stale label. Re-test under the cursor every frame instead.
-let mouseSeen = false;
-window.addEventListener('pointermove', ()=>{ mouseSeen = true; }, { once:true });
+// Hover is tested by hand every frame (not through Pixi's event system) so it works while creatures
+// drift under a still cursor, never gets stuck, and can also be driven by a tap on touch screens.
+let mouseSeen = false, touchHideTimer = null;
+window.addEventListener('pointermove', ()=>{ mouseSeen = true; });
+window.addEventListener('pointerdown', (e)=>{
+  mouseScreen.x = e.clientX; mouseScreen.y = e.clientY; mouseSeen = true;
+  if(e.pointerType === 'touch'){                     // no hover on phones: a tap shows the name for a moment
+    clearTimeout(touchHideTimer);
+    touchHideTimer = setTimeout(()=>{ mouseSeen = false; hideHoverLabel(); }, 1800);
+  }
+});
 function refreshOceanHover(){
-  if(!mouseSeen || !gameStarted || dungeons.active){ return; }
-  try{
-    const r = app.view.getBoundingClientRect();
-    if(mouseScreen.x < r.left || mouseScreen.x > r.right || mouseScreen.y < r.top || mouseScreen.y > r.bottom) return;
-    const px = (mouseScreen.x - r.left) * app.screen.width / r.width;
-    const py = (mouseScreen.y - r.top) * app.screen.height / r.height;
-    const hit = app.renderer.events.rootBoundary.hitTest(px, py);
-    const label = hit && hit._hoverLabel;
-    if(label){ if(label !== hoverLabel) showHoverLabel(label); }
-    else if(hoverLabel) hideHoverLabel();
-  }catch(err){}
+  if(!gameStarted || dungeons.active){ return; }
+  if(!mouseSeen){ if(hoverLabel) hideHoverLabel(); return; }
+  const r = app.view.getBoundingClientRect();
+  if(mouseScreen.x < r.left || mouseScreen.x > r.right || mouseScreen.y < r.top || mouseScreen.y > r.bottom){ hideHoverLabel(); return; }
+  const wx = (mouseScreen.x - r.left) * app.screen.width / r.width - world.x;
+  const wy = (mouseScreen.y - r.top) * app.screen.height / r.height - world.y;
+  let best = null, bestD = Infinity;
+  for(const c of creaturesLayer.children){
+    if(!c._hoverLabel || !c.visible || c.destroyed) continue;
+    const rad = c._hoverR * Math.max(Math.abs(c.scale.x), Math.abs(c.scale.y), 0.5) + 8;
+    const d = Math.hypot(wx - c.x, wy - c.y) - rad;
+    if(d < 0 && d < bestD){ bestD = d; best = c._hoverLabel; }
+  }
+  if(best){ if(best !== hoverLabel) showHoverLabel(best); }
+  else if(hoverLabel) hideHoverLabel();
 }
 
 
@@ -1385,6 +1392,13 @@ const brightnessSliderEl = document.getElementById('brightness-slider');
 const difficultySelectEl = document.getElementById('difficulty-select');
 const showHintsCheckboxEl = document.getElementById('show-hints-checkbox');
 
+// the difficulty choice is remembered between visits
+const DIFF_KEY = 'mocean.difficulty.v1';
+try{
+  const saved = localStorage.getItem(DIFF_KEY);
+  if(saved === 'peaceful' || saved === 'normal' || saved === 'hard'){ options.difficulty = saved; difficultySelectEl.value = saved; }
+}catch(err){}
+
 const pregameHideTargets = ['hud','instructions','touch-controls'];
 function setPregameVisible(visible){
   for(const id of pregameHideTargets){
@@ -1443,6 +1457,7 @@ brightnessSliderEl.addEventListener('input', (e)=>{
 });
 difficultySelectEl.addEventListener('change', (e)=>{
   options.difficulty = e.target.value;
+  try{ localStorage.setItem(DIFF_KEY, options.difficulty); }catch(err){}
   if(options.difficulty === 'peaceful'){
     for(let i=npcs.length-1;i>=0;i--){
       if(npcs[i].type === 'shark'){ destroyNpc(npcs[i]); npcs.splice(i,1); }
@@ -1756,6 +1771,7 @@ const dungeons = MoceanDungeons({
   terrainG, bubblesG, playerG, PLAYER_COLORS, SHARK_COLORS, drawFishShape,
   addXP, popText, burstBubbles, playBlip,
   getLevel: ()=> progress.level,
+  getDifficulty: ()=> options.difficulty,
   mouseScreen, showHoverLabel, hideHoverLabel,
   isStarted: ()=> gameStarted,
   // hide / show the open-ocean layers while the player is inside a cave
