@@ -630,3 +630,58 @@ html,body{
 #biome-banner .bb-small{ color:#9be8ff; font-size:12px; letter-spacing:6px; text-transform:uppercase; }
 #biome-banner .bb-big{ color:var(--foam); font-size:34px; font-weight:700; letter-spacing:3px; }
 #biome-banner.show{ animation:levelPop 3s ease-out forwards; }
+
+/* ============================= ELITE BOSSES & LEVEL-UP UPGRADES ============================= */
+
+#cave-hud .boss-name .boss-tag{ display:block; font-size:10px; letter-spacing:2px; color:#ff9d9d; margin-top:2px; text-shadow:0 1px 4px rgba(0,0,0,0.9); }
+#cave-hud .boss-name.shielded .boss-tag{ color:#9be8ff; }
+#cave-hud .boss-bar.elite{ position:relative; width:480px; height:14px; border-color:rgba(255,140,120,0.8); box-shadow:0 0 12px rgba(255,90,70,0.3); }
+#cave-hud .boss-bar.elite div{ background:linear-gradient(90deg,#d62a2a,#ff6a3a 60%,#ffb36b); }
+#cave-hud .boss-bar.elite.legend{ width:560px; height:16px; border-color:rgba(255,211,106,0.9); box-shadow:0 0 16px rgba(255,211,106,0.35); }
+#cave-hud .boss-bar.elite.legend div{ background:linear-gradient(90deg,#e0561f,#ffb03a 55%,#ffe28a); }
+#cave-hud .boss-bar.elite::after{          /* shield-phase markers at 2/3 and 1/3 health */
+  content:''; position:absolute; inset:0; pointer-events:none;
+  background:linear-gradient(90deg, transparent calc(33.3% - 1px), rgba(255,255,255,0.7) calc(33.3% - 1px), rgba(255,255,255,0.7) calc(33.3% + 1px), transparent calc(33.3% + 1px),
+                                    transparent calc(66.6% - 1px), rgba(255,255,255,0.7) calc(66.6% - 1px), rgba(255,255,255,0.7) calc(66.6% + 1px), transparent calc(66.6% + 1px));
+}
+#cave-hud .boss-bar.shielded{ border-color:#9be8ff; box-shadow:0 0 14px rgba(155,232,255,0.7); }
+#cave-hud .boss-bar.shielded div{ background:linear-gradient(90deg,#4aa8d8,#bff0ff); }
+@media (max-width:640px){
+  #cave-hud .boss-bar.elite{ width:min(480px, 88vw); }
+  #cave-hud .boss-bar.elite.legend{ width:min(560px, 92vw); }
+}
+
+#upgrade-menu{
+  position:fixed; inset:0; z-index:60;
+  display:none; align-items:center; justify-content:center;
+  background:rgba(2,10,18,0.72);
+  backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+  font-family:'Roboto Mono', monospace;
+}
+#upgrade-menu .up-box{ text-align:center; padding:28px 30px 20px; max-width:96vw; }
+#upgrade-menu .up-small{ color:#9be8ff; font-size:12px; letter-spacing:5px; text-transform:uppercase; }
+#upgrade-menu .up-big{ color:var(--foam); font-size:30px; font-weight:700; letter-spacing:3px; margin:6px 0 22px; text-shadow:0 2px 12px rgba(0,0,0,0.8); }
+#upgrade-menu .up-cards{ display:flex; gap:16px; justify-content:center; flex-wrap:wrap; }
+#upgrade-menu .up-card{
+  position:relative; width:190px; padding:20px 14px 14px; cursor:pointer;
+  background:rgba(6,18,28,0.95); color:var(--foam);
+  border:2px solid rgba(223,246,255,0.45); border-radius:12px;
+  font-family:inherit; text-align:center;
+  transition:transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+#upgrade-menu .up-card:hover, #upgrade-menu .up-card:focus-visible{ transform:translateY(-4px); border-color:#ffd36a; box-shadow:0 8px 24px rgba(255,211,106,0.25); outline:none; }
+#upgrade-menu .up-card.maxed{ opacity:0.4; cursor:not-allowed; }
+#upgrade-menu .up-card.maxed:hover{ transform:none; border-color:rgba(223,246,255,0.45); box-shadow:none; }
+#upgrade-menu .up-key{ position:absolute; top:8px; left:10px; font-size:11px; color:rgba(223,246,255,0.55); border:1px solid rgba(223,246,255,0.3); border-radius:4px; padding:0 5px; }
+#upgrade-menu .up-icon{ font-size:34px; color:#ffb36b; line-height:1.2; }
+#upgrade-menu .up-card:nth-child(1) .up-icon{ color:#ff6b7a; }
+#upgrade-menu .up-card:nth-child(2) .up-icon{ color:#9be8ff; }
+#upgrade-menu .up-name{ font-size:16px; font-weight:600; letter-spacing:1px; margin:4px 0 6px; }
+#upgrade-menu .up-desc{ font-size:12px; line-height:1.4; color:rgba(223,246,255,0.8); min-height:34px; }
+#upgrade-menu .up-stat{ font-size:12px; color:#ffd36a; margin-top:10px; }
+#upgrade-menu .up-lvl{ font-size:10px; letter-spacing:1px; color:rgba(223,246,255,0.5); margin-top:6px; }
+#upgrade-menu .up-note{ margin-top:18px; font-size:11px; letter-spacing:1px; color:rgba(223,246,255,0.55); }
+@media (max-width:640px){
+  #upgrade-menu .up-card{ width:min(300px, 86vw); padding:14px; }
+  #upgrade-menu .up-big{ font-size:22px; }
+}
