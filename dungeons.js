@@ -34,6 +34,14 @@
    (* = Mythical Sea Legend: a bigger arena, a longer health bar, spiral attacks
    and a boss that gets steadily angrier as it loses health.)
 
+   Caves grow in every way as you head east: each maze is strictly bigger than the last, with more
+   (and tougher) guardians - from cave 5 on some of them spit shots - and each boss has more health.
+   Bosses from cave 10 up are ELITES: they circle and lead their shots, blink around the arena, fire
+   homing orbs and sweeping streams, wear armor, and raise a bubble shield (that you can only get
+   past by waiting it out) every third of their health. They also get the longest health bars.
+
+   Every 3 character levels you pick an upgrade: +1 heart, faster bubbles or more strength.
+
    Every ability that is not a toggle has a duration and a cooldown; its chip in
    the ability bar fills as the cooldown recovers. An edge-of-screen compass
    points to the next uncleared cave in order.
@@ -46,14 +54,14 @@
 global.MoceanDungeons = function(ctx){
   const { app, world, player, keys, rand, randi, clamp, lerpAngle, floorY,
           PLAYER_COLORS, SHARK_COLORS, drawFishShape, view, hideWhenInside, addXP, popText,
-          burstBubbles, playBlip, isStarted } = ctx;
+          burstBubbles, playBlip, isStarted, getLevel, mouseScreen, showHoverLabel, hideHoverLabel } = ctx;
 
   const SAVE_KEY = 'mocean.dungeons.v2';
   const OLD_SAVE_KEY = 'mocean.dungeons.v1';
   const OLD_TO_NEW = { 1:1, 2:4, 3:3, 4:18, 5:9 };   // v1 cave numbers -> their place in the new order
   const BIO = MoceanBiomes;
   const T = 110; // maze tile size in world units
-  const MAX_HP = 5;
+  const BASE_HP = 5;
   const ROUND = { cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND };
 
   /* ---------------------------------------------------------------- data */
@@ -103,8 +111,20 @@ global.MoceanDungeons = function(ctx){
       { kind:'leviathan', name:'Leviathan, the Sea Serpent King', r:92, legend:true } ]
   ];
 
-  const DUNGEONS = RAW.map(([id, name, mw, mh, guards, wall, floor, accent, floatY, ability, enemies, boss])=>{
-    const d = { id, name, x:BIO.dungeonX(id), mw, mh, guards, wall, floor, accent, ability, enemies, boss };
+  /* Every cave is strictly bigger than the one before it (maze area), has more guardians, and its boss has
+     more health. The sizes/guard counts in RAW are only a starting point; this pass makes the growth steady. */
+  let prevArea = 0, prevBossHp = 0;
+  const DUNGEONS = RAW.map(([id, name, _mw, _mh, _guards, wall, floor, accent, floatY, ability, enemies, boss])=>{
+    const mh = 4 + Math.floor(id*0.4);
+    let mw = 5 + Math.floor(id*0.6);
+    while(mw*mh <= prevArea) mw++;                         // never smaller than the cave before
+    prevArea = mw*mh;
+    const guards = 3 + id + Math.floor(id/3);              // 4 in cave 1 ... 29 in cave 20
+    // boss health: caves 10+ ramp much harder (longer bars); never lower than the previous boss
+    let bossHp = (id < 10 ? 12 + 3*id : (12 + 4*id)*(1 + 0.08*(id - 9))) * (boss.legend ? (id < 10 ? 1.4 : 1.12) : 1);
+    bossHp = Math.max(Math.round(bossHp), prevBossHp + 2);
+    prevBossHp = bossHp;
+    const d = { id, name, x:BIO.dungeonX(id), mw, mh, guards, wall, floor, accent, ability, enemies, boss, bossHp };
     if(floatY) d.floatY = floatY;
     d.rock = BIO.mixHex(wall, 0x202028, 0.45);          // entrance rock colour
     d.biome = BIO.biomeForCave(id);
@@ -149,7 +169,7 @@ global.MoceanDungeons = function(ctx){
 
   /* ---------------------------------------------------------------- save */
 
-  const save = { cleared:[], form:'fish', glow:false };
+  const save = { cleared:[], form:'fish', glow:false, up:{ hearts:0, rate:0, str:0 } };
   try{
     const raw = localStorage.getItem(SAVE_KEY);
     if(raw) Object.assign(save, JSON.parse(raw));
@@ -161,7 +181,27 @@ global.MoceanDungeons = function(ctx){
       }
     }
   }catch(err){}
+  save.up = Object.assign({ hearts:0, rate:0, str:0 }, save.up);
   function persist(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(save)); }catch(err){} }
+
+  /* --------------------------------------------- level-up upgrades (every 3 levels) */
+
+  const UP_CAP = { hearts:7, rate:8, str:10 };
+  const UP_KEYS = ['hearts', 'rate', 'str'];
+  const maxHp   = ()=> BASE_HP + save.up.hearts;
+  const rateMul = ()=> 1 + 0.12*save.up.rate;          // bubble fire rate
+  const strMul  = ()=> 1 + 0.25*save.up.str;           // damage to guardians and bosses
+  const upUsed  = ()=> save.up.hearts + save.up.rate + save.up.str;
+  const upOwed  = ()=> Math.max(0, Math.floor(getLevel()/3) - upUsed());
+  const upOpen  = (k)=> save.up[k] < UP_CAP[k];
+  const UPGRADES = {
+    hearts:{ name:'Bigger Heart',  icon:'♥', desc:'+1 max heart in caves, and heal 1 now',
+             now:()=> `${maxHp()} hearts`,                           next:()=> `${maxHp() + 1} hearts` },
+    rate:  { name:'Bubble Rate',   icon:'○', desc:'Fire bubbles 12% faster',
+             now:()=> `${Math.round(rateMul()*100)}% fire rate`,     next:()=> `${Math.round((rateMul() + 0.12)*100)}% fire rate` },
+    str:   { name:'Strength',      icon:'✦', desc:'+25% damage to guardians and bosses',
+             now:()=> `${Math.round(strMul()*100)}% damage`,         next:()=> `${Math.round((strMul() + 0.25)*100)}% damage` }
+  };
 
   const has = (id)=> save.cleared.some(n=> DUNGEONS[n-1].ability === id);
   const unlockedList = ()=> Object.keys(ABILITIES).filter(has);
@@ -248,6 +288,54 @@ global.MoceanDungeons = function(ctx){
   caveHud.id = 'cave-hud'; caveHud.style.display = 'none';
   document.body.appendChild(caveHud);
 
+  const upMenu = document.createElement('div');
+  upMenu.id = 'upgrade-menu'; upMenu.style.display = 'none';
+  upMenu.innerHTML = '<div class="up-box"><div class="up-small"></div><div class="up-big">Choose an upgrade</div><div class="up-cards"></div><div class="up-note">Click a card or press 1, 2 or 3</div></div>';
+  document.body.appendChild(upMenu);
+  const upSmall = upMenu.querySelector('.up-small'), upCards = upMenu.querySelector('.up-cards');
+  let menuOpen = false, menuDelay = -1;
+
+  function openUpgradeMenu(){
+    menuOpen = true;
+    hideHoverLabel();
+    keys.left = keys.right = keys.up = keys.down = keys.space = false;
+    const n = upOwed();
+    upSmall.textContent = `Level ${getLevel()} · ${n} upgrade${n > 1 ? 's' : ''} to pick`;
+    upCards.innerHTML = '';
+    UP_KEYS.forEach((k, i)=>{
+      const u = UPGRADES[k], open = upOpen(k), btn = document.createElement('button');
+      btn.type = 'button'; btn.className = 'up-card' + (open ? '' : ' maxed'); btn.disabled = !open;
+      btn.innerHTML = `<div class="up-key">${i + 1}</div><div class="up-icon">${u.icon}</div><div class="up-name">${u.name}</div>` +
+        `<div class="up-desc">${u.desc}</div><div class="up-stat">${open ? `${u.now()} → ${u.next()}` : 'MAXED'}</div>` +
+        `<div class="up-lvl">${save.up[k]} / ${UP_CAP[k]}</div>`;
+      btn.addEventListener('click', ()=> chooseUpgrade(k));
+      upCards.appendChild(btn);
+    });
+    upMenu.style.display = 'flex';
+  }
+
+  function chooseUpgrade(k){
+    if(!menuOpen || !upOpen(k)) return;
+    save.up[k]++;
+    if(k === 'hearts' && M){ M.php = Math.min(maxHp(), M.php + 1); caveHud._key = null; }
+    persist();
+    menuOpen = false; upMenu.style.display = 'none';
+    menuDelay = upOwed() > 0 ? 15 : -1;                   // another pick waiting? show it right after
+    burstBubbles(player.x, player.y, 16); playBlip();
+    popText(UPGRADES[k].name + '!', 'flip');
+  }
+
+  function resetUpgrades(){ save.up = { hearts:0, rate:0, str:0 }; persist(); if(M) caveHud._key = null; }
+
+  function updateUpgradeOffer(dt){
+    if(menuOpen || !isStarted()) return;
+    if(upOwed() > 0 && UP_KEYS.some(upOpen)){
+      if(menuDelay < 0) menuDelay = 100;                  // let the level-up banner play first
+      menuDelay -= dt;
+      if(menuDelay <= 0){ menuDelay = -1; openUpgradeMenu(); }
+    } else menuDelay = -1;
+  }
+
   const compass = document.createElement('div');
   compass.id = 'cave-compass'; compass.style.display = 'none';
   compass.innerHTML = '<div class="cc-arrow">▲</div><div class="cc-label"></div><div class="cc-where"></div>';
@@ -333,12 +421,13 @@ global.MoceanDungeons = function(ctx){
   function damageBoss(n){
     const b = M.boss;
     if(!b.active || b.dead) return;
-    b.hp -= n; b.hit = 6;
+    if(b.shieldT > 0) return;                                    // shield phase: nothing gets through
+    b.hp -= n*strMul()*(1 - (b.armor || 0)); b.hit = 6;          // Strength upgrade adds, elite armor subtracts
     if(b.hp <= 0) killBoss();
   }
   function hurtGuard(k, n){
     const e = M.guards[k];
-    e.hp -= n;
+    e.hp -= n*strMul();
     if(e.hp > 0) return false;
     M.guards.splice(k, 1); burstBubbles(e.x, e.y, 8); addXP(2 + M.d.id);
     return true;
@@ -361,8 +450,8 @@ global.MoceanDungeons = function(ctx){
     magnet: ()=> true,
     ripple: ()=> { ringFx(player.x, player.y, 460, 0x9be8ff); return true; },
     heal:   ()=> {
-      if(M.php >= MAX_HP){ popText('Already at full health', 'warn'); return false; }
-      M.php = Math.min(MAX_HP, M.php + 2); caveHud._key = null;
+      if(M.php >= maxHp()){ popText('Already at full health', 'warn'); return false; }
+      M.php = Math.min(maxHp(), M.php + 2); caveHud._key = null;
       ringFx(player.x, player.y, 200, 0x7dff9e);
       return true;
     },
@@ -433,6 +522,11 @@ global.MoceanDungeons = function(ctx){
 
   function handleKey(e){
     if(!isStarted()) return false;
+    if(menuOpen){                                                // the upgrade menu eats every key
+      const i = ['1', '2', '3'].indexOf(e.key);
+      if(i >= 0) chooseUpgrade(UP_KEYS[i]);
+      return true;
+    }
     if(e.key === 'Escape' && active){ exitDungeon(false); return true; }
     if(e.repeat || e.ctrlKey || e.metaKey || e.altKey) return false;
     const id = KEYMAP[e.key.length === 1 ? e.key.toUpperCase() : e.key];
@@ -580,7 +674,7 @@ global.MoceanDungeons = function(ctx){
   let active = false;
   let M = null;
 
-  function genMaze(mw, mh, big){
+  function genMaze(mw, mh, big, id){
     const W0 = mw*2+1, H0 = mh*2+1;
     const g0 = Array.from({length:H0}, ()=> new Array(W0).fill(1));
     const open = Array.from({length:mh}, ()=> Array.from({length:mw}, ()=> []));
@@ -607,7 +701,7 @@ global.MoceanDungeons = function(ctx){
     // the boss arena hangs off the right edge, behind the farthest cell of the last column
     let best = [mw-1, 0];
     for(let y=0;y<mh;y++) if(dist[y][mw-1] > dist[best[1]][best[0]]) best = [mw-1, y];
-    const AW = big ? 12 : 9, AH = big ? 9 : 7, W = W0 + AW + 1, H = Math.max(H0, AH + 2);   // legends get a bigger arena
+    const AW = (big ? 12 : 9) + Math.floor(id/5), AH = (big ? 9 : 7) + Math.floor(id/8), W = W0 + AW + 1, H = Math.max(H0, AH + 2);   // legends get a bigger arena
     const g = Array.from({length:H}, ()=> new Array(W).fill(1));
     for(let y=0;y<H0;y++) for(let x=0;x<W0;x++) g[y][x] = g0[y][x];
     const doorY = best[1]*2+1, top = clamp(doorY - (AH >> 1), 1, H - AH - 1);
@@ -642,7 +736,7 @@ global.MoceanDungeons = function(ctx){
   function setDoor(closed){ M.m.g[M.m.door.y][M.m.door.x] = closed ? 1 : 0; buildMazeGraphics(M.d, M.m); }
 
   function enterDungeon(d){
-    const m = genMaze(d.mw, d.mh, d.legend);
+    const m = genMaze(d.mw, d.mh, d.legend, d.id);
     buildMazeGraphics(d, m);
 
     const pearls = [], cells = [];
@@ -660,19 +754,24 @@ global.MoceanDungeons = function(ctx){
     for(let i=0;i<d.guards;i++){
       const [cx,cy] = far[randi(0, far.length-1)];
       const p = cellPos(cx,cy);
-      guards.push({ kind:d.enemies[randi(0, d.enemies.length-1)], hp:2 + Math.floor(d.id/7), dir:0,
+      guards.push({ kind:d.enemies[randi(0, d.enemies.length-1)], hp:2 + Math.floor(d.id/4), dir:0,
                     cx, cy, x:p.x, y:p.y, tx:p.x, ty:p.y, ncx:cx, ncy:cy,
-                    speed: 0.9 + d.id*0.07 + rand(0,0.25), r:22, ph:rand(0,6), vx:0, vy:0 });
+                    speed: 0.85 + d.id*0.075 + rand(0,0.25), r:22, ph:rand(0,6), vx:0, vy:0,
+                    shooter: d.id >= 5 && Math.random() < Math.min(0.6, 0.06*(d.id - 3)),   // deeper guardians spit shots
+                    cd: rand(60, 160) });
     }
     const A = m.arena, ac = { x:(A.x0 + A.w/2)*T, y:(A.y0 + A.h/2)*T };
-    const hp = Math.round((12 + 3*d.id) * (d.legend ? 1.4 : 1));
+    const hp = d.bossHp, elite = d.id >= 10, tier = Math.max(0, d.id - 9);
     const boss = Object.assign({ hp, max:hp, x:ac.x + 200, y:ac.y, vx:0, vy:0, ang:Math.PI, state:'idle',
-                                 t:0, hit:0, active:false, dead:false, atk:'charge', tx:ac.x, ty:ac.y }, d.boss);
+                                 t:0, hit:0, active:false, dead:false, atk:'charge', tx:ac.x, ty:ac.y,
+                                 elite, tier, armor: elite ? Math.min(0.25, 0.025*tier) : 0,
+                                 phase:1, shieldT:0, lastAtk:'', orb:rand(0, 6.28), orbDir:Math.random() < 0.5 ? 1 : -1,
+                                 lkx:player.x, lky:player.y }, d.boss);
     const start = cellPos(0,0);
     const seen = Array.from({length:m.H}, ()=> new Array(m.W).fill(false));
 
     M = { d, m, pearls, guards, start, orb:ac, ac, orbOn:false, seen, armed:false, done:false, frame:0,
-          boss, shots:[], bubs:[], php:MAX_HP, fireCd:0, sealed:false, fx:[], vortex:null, ink:null, sonarT:0 };
+          boss, shots:[], bubs:[], php:maxHp(), fireCd:0, sealed:false, fx:[], vortex:null, ink:null, sonarT:0 };
     const cell = Math.max(4, Math.floor(Math.min(230/m.W, 170/m.H)));
     mapEl.width = m.W*cell; mapEl.height = m.H*cell; M.cell = cell;
 
@@ -682,6 +781,7 @@ global.MoceanDungeons = function(ctx){
     player.x = start.x; player.y = start.y; player.vx = player.vy = 0;
     invuln = 60;
     hideWhenInside(true);
+    hideHoverLabel();
     waterBgEl.style.display = 'none';
     dungeonC.visible = true; darkS.visible = true; mapEl.style.display = 'block';
     showBanner('Entering', d.name, d.biome.name + ' · ' + (d.legend ? 'A Mythical Sea Legend waits at the far end.' : 'Space shoots bubbles. Beat the boss, then take the relic.'));
@@ -693,6 +793,7 @@ global.MoceanDungeons = function(ctx){
     const d = M.d;
     active = false;
     dungeonC.visible = false; darkS.visible = false; mapEl.style.display = 'none'; caveHud.style.display = 'none';
+    if(caveHover){ hideHoverLabel(caveHover); caveHover = null; }
     hideWhenInside(false);
     waterBgEl.style.display = '';
     const p = exitPos(d, 230);
@@ -769,28 +870,30 @@ global.MoceanDungeons = function(ctx){
 
   function defeat(){
     M.fx.length = 0; M.vortex = null; M.ink = null; TM.ghost = 0;
-    M.php = MAX_HP; M.shots.length = 0; M.bubs.length = 0; M.armed = false;
+    M.php = maxHp(); M.shots.length = 0; M.bubs.length = 0; M.armed = false;
     player.x = M.start.x; player.y = M.start.y; player.vx = player.vy = 0;
     invuln = 120;
     const b = M.boss;
     if(!b.dead){
       b.hp = b.max; b.active = false; b.state = 'idle'; b.x = M.ac.x + 200; b.y = M.ac.y;
+      b.phase = 1; b.shieldT = 0; b.lastAtk = '';
       if(M.sealed){ M.sealed = false; setDoor(false); }
     }
     popText('Swept back to the start!', 'warn');
   }
 
-  function damagePlayer(fx, fy){
-    M.php--; invuln = 110;
+  function damagePlayer(fx, fy, n){
+    n = n || 1;
+    M.php -= n; invuln = 110;
     const a = Math.atan2(player.y - fy, player.x - fx);
     player.vx += Math.cos(a)*9; player.vy += Math.sin(a)*9;
     burstBubbles(player.x, player.y, 10); playBlip();
-    if(M.php <= 0) defeat(); else popText('-1 ♥', 'warn');
+    if(M.php <= 0) defeat(); else popText(`-${n} ♥`, 'warn');
   }
 
   function fire(){
     if(!active || !M || M.fireCd > 0) return;
-    M.fireCd = 11 / (TM.rapid > 0 ? 2.6 : 1);                    // Rapid Bubbles
+    M.fireCd = 11 / (TM.rapid > 0 ? 2.6 : 1) / rateMul();         // Rapid Bubbles x the Bubble Rate upgrade
     const a = player.displayAngle, pierce = TM.pierce > 0;       // Piercing Bubbles
     const spread = TM.triple > 0 ? [-0.3, 0, 0.3] : [0];         // Triple Shot
     for(const o of spread){
@@ -853,56 +956,157 @@ global.MoceanDungeons = function(ctx){
     hydra:['fan','fan','spiral','ring'], charybdis:['spiral','ring','spiral','fan'],
     leviathan:['charge','spiral','fan','ring','spiral']
   };
+  // Elite bosses (caves 10+) learn extra tricks as the caves get deeper: [attack, first tier that has it]
+  const ELITE_EXTRA = [['aimed', 1], ['homing', 2], ['sweep', 4], ['blink', 6], ['barrage', 8]];
+  function atkList(b){
+    const base = BOSS_ATK[b.kind];
+    if(!b.elite) return base;
+    const extra = ELITE_EXTRA.filter(([, t]) => b.tier >= t).map(([a]) => a);
+    return base.concat(extra, extra);                   // they lean on the new tricks
+  }
 
-  function shoot(x, y, a, sp){ M.shots.push({ x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, life:240 }); }
+  function shoot(x, y, a, sp, extra){ M.shots.push(Object.assign({ x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, life:240 }, extra)); }
+
+  // where to aim so a shot of speed sp meets the player: elites lead their target instead of firing at where you were
+  function leadAngle(b, sp, k){
+    const dx = player.x - b.x, dy = player.y - b.y, t = Math.hypot(dx, dy)/sp*(k === undefined ? 0.85 : k);
+    return Math.atan2(dy + player.vy*t, dx + player.vx*t);
+  }
 
   function updateBoss(dt){
     const b = M.boss, A = M.m.arena;
     if(b.dead) return;
     if(b.hit > 0) b.hit -= dt;
+    if(b.shieldT > 0) b.shieldT -= dt;
     if(!b.active){
       if(player.x > (A.x0 + 1)*T){
         b.active = true; M.sealed = true; setDoor(true); b.state = 'rest'; b.t = 70;
-        showBanner(b.legend ? 'Mythical Sea Legend' : 'Boss', b.name, 'Shoot it with Space!');
+        showBanner(b.legend ? 'Mythical Sea Legend' : (b.elite ? 'Elite Boss' : 'Boss'), b.name, b.elite ? 'It leads its shots, blinks and raises shields. Pop its orbs!' : 'Shoot it with Space!');
       }
       return;
     }
-    const rage = b.legend ? 1 + (1 - b.hp/b.max)*0.5 : (b.hp < b.max*0.5 ? 1.15 : 1);   // legends get angrier as they bleed
+    const frac = b.hp/b.max, tier = b.tier, camo = TM.camo > 0;
+    let rage;
+    if(b.elite) rage = 1 + (1 - frac)*(0.35 + 0.025*tier) + (b.legend ? 0.08 : 0);       // elites ramp up as they bleed
+    else rage = b.legend ? 1 + (1 - frac)*0.5 : (frac < 0.5 ? 1.15 : 1);                  // legends get angrier as they bleed
+    const rt = b.elite ? 0.72 : 1;                                                         // elites rest less between attacks
     const x0 = A.x0*T + b.r, x1 = (A.x0 + A.w)*T - b.r, y0 = A.y0*T + b.r, y1 = (A.y0 + A.h)*T - b.r;
-    const toP = TM.camo > 0 ? b.ang : Math.atan2(player.y - b.y, player.x - b.x);   // Camouflage: it can't find you
+    if(!camo){ b.lkx = player.x; b.lky = player.y; }                                       // Camouflage: it can't find you
+    const toP = camo ? b.ang : Math.atan2(player.y - b.y, player.x - b.x);
+    const aimAt = (sp, k)=> camo ? b.ang : leadAngle(b, sp, k);
+
+    // elite defence: every third of its health it raises a shield and releases homing orbs. Pop the orbs, wait it out.
+    if(b.elite){
+      const ph = frac < 0.34 ? 3 : frac < 0.67 ? 2 : 1;
+      if(ph > b.phase){
+        b.phase = ph; b.shieldT = 150 + tier*6; b.state = 'rest'; b.t = 100;
+        M.fx.push({ type:'ring', x:b.x, y:b.y, r1:b.r*3.2, col:0x9be8ff, life:36, max:36 });
+        const n = 4 + ph*2 + (b.legend ? 2 : 0);
+        for(let i=0;i<n;i++) shoot(b.x, b.y, i/n*Math.PI*2 + b.ang, 2.1, { home:true, life:420 });
+        popText(ph === 3 ? 'ENRAGED! Shield up!' : 'Shield up! Pop the orbs!', 'warn');
+      }
+    }
+
     b.t -= dt;
     if(b.state === 'rest'){
-      if(Math.hypot(b.tx - b.x, b.ty - b.y) < 24){ b.tx = rand(x0, x1); b.ty = rand(y0, y1); }
-      const a = Math.atan2(b.ty - b.y, b.tx - b.x), ease = 1 - Math.pow(0.96, dt);
-      b.vx += (Math.cos(a)*1.5*rage - b.vx)*ease; b.vy += (Math.sin(a)*1.5*rage - b.vy)*ease;
+      if(b.elite){
+        // circle the player at a distance, changing direction now and then, instead of drifting at random
+        b.orb += 0.011*dt*rage*b.orbDir;
+        if(Math.random() < 0.002*dt) b.orbDir = -b.orbDir;
+        const dd = 250 + 50*Math.sin(b.orb*2.3);
+        b.tx = clamp(b.lkx + Math.cos(b.orb)*dd, x0, x1); b.ty = clamp(b.lky + Math.sin(b.orb)*dd, y0, y1);
+      } else if(Math.hypot(b.tx - b.x, b.ty - b.y) < 24){ b.tx = rand(x0, x1); b.ty = rand(y0, y1); }
+      const a = Math.atan2(b.ty - b.y, b.tx - b.x), ease = 1 - Math.pow(0.96, dt), sp = (b.elite ? 2.1 : 1.5)*rage;
+      b.vx += (Math.cos(a)*sp - b.vx)*ease; b.vy += (Math.sin(a)*sp - b.vy)*ease;
       b.x += b.vx*dt; b.y += b.vy*dt;
+      if(b.elite){ b.x = clamp(b.x, x0, x1); b.y = clamp(b.y, y0, y1); }
       b.ang = lerpAngle(b.ang, toP, 0.05*dt);
-      if(b.t <= 0){ const l = BOSS_ATK[b.kind]; b.atk = l[randi(0, l.length-1)]; b.state = 'wind'; b.t = b.atk === 'charge' ? 62 : 45; }
+      if(b.t <= 0){
+        const l = atkList(b);
+        let pick = l[randi(0, l.length-1)];
+        if(b.elite) for(let k=0;k<5 && pick === b.lastAtk;k++) pick = l[randi(0, l.length-1)];   // never the same trick twice
+        b.lastAtk = b.atk = pick; b.state = 'wind';
+        const base = b.atk === 'charge' ? 62 : 45;
+        b.t = b.elite ? Math.max(26, base - tier*2.5) : base;
+      }
     } else if(b.state === 'wind'){
       b.ang = lerpAngle(b.ang, toP, 0.2*dt);
       b.vx *= Math.pow(0.9, dt); b.vy *= Math.pow(0.9, dt); b.x += b.vx*dt; b.y += b.vy*dt;
       if(b.t <= 0){
         if(b.atk === 'charge'){
+          const sp = (b.elite ? 7.5 : 6.5)*rage, a = b.elite ? aimAt(sp, 0.55) : toP;
           b.state = 'charge'; b.t = 34;
-          b.vx = Math.cos(toP)*6.5*rage; b.vy = Math.sin(toP)*6.5*rage; b.ang = toP;
+          b.vx = Math.cos(a)*sp; b.vy = Math.sin(a)*sp; b.ang = a;
         } else if(b.atk === 'spiral'){
-          b.state = 'spiral'; b.t = 110; b.cd = 0; b.spA = b.ang;
+          b.state = 'spiral'; b.t = b.elite ? 130 : 110; b.cd = 0; b.spA = b.ang;
+        } else if(b.atk === 'sweep'){
+          b.state = 'sweep'; b.t = 100; b.cd = 0; b.swDir = Math.random() < 0.5 ? 1 : -1; b.spA = toP - b.swDir*0.95;
+        } else if(b.atk === 'barrage'){
+          b.state = 'barrage'; b.t = 96; b.cd = 0;
+        } else if(b.atk === 'blink'){
+          let spot = null;                                      // vanish and reappear a fair distance from the player
+          for(let k=0;k<12 && !spot;k++){
+            const a = rand(0, Math.PI*2), d = rand(240, 380);
+            const nx = clamp(player.x + Math.cos(a)*d, x0, x1), ny = clamp(player.y + Math.sin(a)*d, y0, y1);
+            if(Math.hypot(nx - player.x, ny - player.y) > 210) spot = { x:nx, y:ny };
+          }
+          burstBubbles(b.x, b.y, 10);
+          if(spot){ b.x = spot.x; b.y = spot.y; b.vx = b.vy = 0; }
+          burstBubbles(b.x, b.y, 10);
+          M.fx.push({ type:'ring', x:b.x, y:b.y, r1:130, col:0xd59bff, life:22, max:22 });
+          const a = aimAt(4.4*rage), n = tier >= 8 ? 7 : 5;
+          for(let i=0;i<n;i++) shoot(b.x, b.y, a + (i - (n-1)/2)*0.2, 4.4*rage);
+          b.state = 'rest'; b.t = 70/rage;
         } else {
-          if(b.atk === 'ring'){ const n = b.legend ? 12 : 8; for(let i=0;i<n;i++) shoot(b.x, b.y, i/n*Math.PI*2 + b.ang, 2.4*rage); }
-          else { const n = rage > 1 ? 5 : 3; for(let i=0;i<n;i++) shoot(b.x, b.y, toP + (i - (n-1)/2)*0.3, 3.4*rage); }
-          b.state = 'rest'; b.t = rand(110, 170)/rage;
+          if(b.atk === 'ring'){
+            const n = b.elite ? Math.min(20, 10 + tier) : (b.legend ? 12 : 8);
+            for(let i=0;i<n;i++) shoot(b.x, b.y, i/n*Math.PI*2 + b.ang, 2.4*rage);
+            if(b.elite && tier >= 6) for(let i=0;i<n;i++) shoot(b.x, b.y, (i + 0.5)/n*Math.PI*2 + b.ang, 1.6*rage);   // a slower second ring in the gaps
+          } else if(b.atk === 'aimed'){
+            const sp = 4.4*rage, a = aimAt(sp), n = 3 + (tier >= 5 ? 2 : 0);
+            for(let i=0;i<n;i++) shoot(b.x, b.y, a + (i - (n-1)/2)*0.12, sp);
+          } else if(b.atk === 'homing'){
+            const n = 2 + Math.floor(tier/4);
+            for(let i=0;i<n;i++) shoot(b.x, b.y, toP + (i - (n-1)/2)*0.7, 2.0, { home:true, life:420 });
+          } else {
+            const n = b.elite ? 5 + (tier >= 6 ? 2 : 0) + (tier >= 10 ? 2 : 0) : (rage > 1 ? 5 : 3);
+            const a = b.elite ? aimAt(3.4*rage, 0.6) : toP;
+            for(let i=0;i<n;i++) shoot(b.x, b.y, a + (i - (n-1)/2)*(b.elite ? 0.26 : 0.3), 3.4*rage);
+          }
+          b.state = 'rest'; b.t = rand(110, 170)/rage*rt;
         }
       }
     } else if(b.state === 'charge'){
       b.x += b.vx*dt; b.y += b.vy*dt;
       const cx = clamp(b.x, x0, x1), cy = clamp(b.y, y0, y1);
-      if(cx !== b.x || cy !== b.y){ b.x = cx; b.y = cy; b.t = 0; burstBubbles(b.x, b.y, 6); }
-      if(b.t <= 0){ b.state = 'rest'; b.t = 100/rage; }
+      if(cx !== b.x || cy !== b.y){
+        b.x = cx; b.y = cy; b.t = 0; burstBubbles(b.x, b.y, 6);
+        if(b.elite){                                            // slamming into the wall throws out a ring of shots
+          const n = 8 + Math.floor(tier/2);
+          for(let i=0;i<n;i++) shoot(b.x, b.y, i/n*Math.PI*2 + b.ang, 2.7*rage);
+        }
+      }
+      if(b.t <= 0){ b.state = 'rest'; b.t = 100/rage*rt; }
     } else if(b.state === 'spiral'){
       b.vx *= Math.pow(0.9, dt); b.vy *= Math.pow(0.9, dt); b.x += b.vx*dt; b.y += b.vy*dt;
       b.spA += 0.16*dt*rage; b.ang = b.spA; b.cd -= dt;
-      if(b.cd <= 0){ b.cd = 6/rage; for(let k=0;k<3;k++) shoot(b.x, b.y, b.spA + k*Math.PI*2/3, 2.6*rage); }
-      if(b.t <= 0){ b.state = 'rest'; b.t = 100/rage; }
+      const arms = b.elite && tier >= 5 ? 4 : 3;
+      if(b.cd <= 0){ b.cd = 6/rage; for(let k=0;k<arms;k++) shoot(b.x, b.y, b.spA + k*Math.PI*2/arms, 2.6*rage); }
+      if(b.t <= 0){ b.state = 'rest'; b.t = 100/rage*rt; }
+    } else if(b.state === 'sweep'){                              // a rotating stream: stand in the gap, or strafe against it
+      b.vx *= Math.pow(0.9, dt); b.vy *= Math.pow(0.9, dt); b.x += b.vx*dt; b.y += b.vy*dt;
+      b.spA += b.swDir*0.019*dt*rage; b.ang = b.spA; b.cd -= dt;
+      if(b.cd <= 0){ b.cd = 3.5/rage; shoot(b.x, b.y, b.spA, 3.3*rage); if(tier >= 7) shoot(b.x, b.y, b.spA + Math.PI, 3.3*rage); }
+      if(b.t <= 0){ b.state = 'rest'; b.t = 90/rage*rt; }
+    } else if(b.state === 'barrage'){                            // three quick, well-aimed volleys
+      b.vx *= Math.pow(0.9, dt); b.vy *= Math.pow(0.9, dt); b.x += b.vx*dt; b.y += b.vy*dt;
+      b.ang = lerpAngle(b.ang, toP, 0.25*dt); b.cd -= dt;
+      if(b.cd <= 0){
+        b.cd = 26/rage;
+        const sp = 4.8*rage, a = aimAt(sp);
+        for(let i=-1;i<=1;i++) shoot(b.x, b.y, a + i*0.1, sp);
+      }
+      if(b.t <= 0){ b.state = 'rest'; b.t = 90/rage*rt; }
     }
   }
 
@@ -940,6 +1144,15 @@ global.MoceanDungeons = function(ctx){
         if(!p.pierce){ dead = true; damageBoss(p.dmg || 1); }
         else if(!p.hitBoss){ p.hitBoss = true; damageBoss(p.dmg || 1); }
       }
+      if(!dead && b.shieldT > 0 && b.active && !b.dead && Math.hypot(p.x - b.x, p.y - b.y) < b.r + rad + 26) dead = true;   // the shield pops stray bubbles
+      if(!dead) for(let k=M.shots.length-1;k>=0;k--){              // bubbles pop homing orbs
+        const sh = M.shots[k];
+        if(sh.home && Math.hypot(p.x - sh.x, p.y - sh.y) < rad + 13){
+          M.shots.splice(k, 1); burstBubbles(sh.x, sh.y, 3);
+          if(!p.pierce) dead = true;
+          break;
+        }
+      }
       if(!dead) for(let k=M.guards.length-1;k>=0;k--){
         const e = M.guards[k];
         if(Math.hypot(p.x - e.x, p.y - e.y) < e.r + rad + 1){
@@ -960,6 +1173,14 @@ global.MoceanDungeons = function(ctx){
         if(vd < 380 && vd > 8){ const pull = (1.1 + (380 - vd)/380*2.2)*dt; e.x += vx/vd*pull; e.y += vy/vd*pull; }
       }
       stepGuard(e, gdt, blind);
+      if(e.shooter){                                            // deeper guardians spit a shot when you are close
+        e.cd -= gdt;
+        if(e.cd <= 0 && !blind){
+          const dd = Math.hypot(player.x - e.x, player.y - e.y);
+          if(dd < 480){ e.cd = Math.max(70, rand(120, 190) - M.d.id*3); shoot(e.x, e.y, Math.atan2(player.y - e.y, player.x - e.x), 2.6 + M.d.id*0.04); }
+          else e.cd = 20;
+        }
+      }
       if(!safe() && Math.hypot(player.x - e.x, player.y - e.y) < e.r + pr*0.8){ damagePlayer(e.x, e.y); break; }
     }
     if(V){
@@ -975,9 +1196,14 @@ global.MoceanDungeons = function(ctx){
 
     // boss + its shots
     updateBoss(eDt);
-    if(b.active && !b.dead && !safe() && Math.hypot(player.x - b.x, player.y - b.y) < b.r + pr*0.7) damagePlayer(b.x, b.y);
+    if(b.active && !b.dead && !safe() && Math.hypot(player.x - b.x, player.y - b.y) < b.r + pr*0.7)
+      damagePlayer(b.x, b.y, (b.elite && b.tier >= 6 && b.state === 'charge') ? 2 : 1);      // late elites hit hard when they ram you
     for(let i=M.shots.length-1;i>=0;i--){
       const p = M.shots[i]; if(!p) continue;
+      if(p.home && TM.camo <= 0){                                  // homing orbs curve toward you (slowly)
+        const sp = Math.hypot(p.vx, p.vy), na = lerpAngle(Math.atan2(p.vy, p.vx), Math.atan2(player.y - p.y, player.x - p.x), 0.035*eDt);
+        p.vx = Math.cos(na)*sp; p.vy = Math.sin(na)*sp;
+      }
       p.x += p.vx*eDt; p.y += p.vy*eDt; p.life -= eDt;
       let dead = p.life <= 0 || isWall(Math.floor(p.x/T), Math.floor(p.y/T));
       if(!dead && M.ink && Math.hypot(p.x - M.ink.x, p.y - M.ink.y) < M.ink.r) dead = true;        // the ink eats shots
@@ -1011,18 +1237,56 @@ global.MoceanDungeons = function(ctx){
     darkS.width = darkS.height = lightR / 0.085;
 
     drawEntities(now);
+    updateCaveHover();
     if(M.frame % 6 === 0) drawMap();
     updateCaveHud();
   }
 
   function updateCaveHud(){
     const b = M.boss, showBoss = b.active && !b.dead;
-    const key = M.php + '|' + (showBoss ? b.hp : -1);
+    const shielded = showBoss && b.shieldT > 0;
+    const key = M.php + '|' + maxHp() + '|' + (showBoss ? Math.ceil(b.hp) : -1) + '|' + shielded;
     if(key === caveHud._key) return;
     caveHud._key = key;
     caveHud.style.display = 'block';
-    caveHud.innerHTML = '<div class="hearts">' + '♥'.repeat(Math.max(0, M.php)) + '<span>' + '♥'.repeat(MAX_HP - Math.max(0, M.php)) + '</span></div>' +
-      (showBoss ? `<div class="boss-name${b.legend ? ' legend' : ''}">${b.legend ? '✦ ' : ''}${b.name}</div><div class="boss-bar${b.legend ? ' legend' : ''}"><div style="width:${Math.max(0, b.hp/b.max*100)}%"></div></div>` : '');
+    const cls = (b.legend ? ' legend' : '') + (b.elite ? ' elite' : '') + (shielded ? ' shielded' : '');
+    const tag = b.elite ? `<span class="boss-tag">ELITE · ARMOR ${Math.round(b.armor*100)}%${shielded ? ' · SHIELDED' : ''}</span>` : '';
+    caveHud.innerHTML = '<div class="hearts">' + '♥'.repeat(Math.max(0, M.php)) + '<span>' + '♥'.repeat(Math.max(0, maxHp() - Math.max(0, M.php))) + '</span></div>' +
+      (showBoss ? `<div class="boss-name${cls}">${b.legend ? '✦ ' : ''}${b.name}${tag}</div><div class="boss-bar${cls}"><div style="width:${Math.max(0, b.hp/b.max*100)}%"></div></div>` : '');
+  }
+
+  /* ---------------- hover labels for guardians and bosses ---------------- */
+
+  const SPECIES = { crab:'Crab', urchin:'Sea Urchin', eel:'Moray Eel', puffer:'Pufferfish', jelly:'Jellyfish', angler:'Anglerfish',
+                    kraken:'Kraken', ray:'Manta Ray', siren:'Siren', ghostship:'Ghost Ship', dragon:'Sea Dragon', turtle:'Giant Sea Turtle',
+                    serpent:'Sea Serpent', leviathan:'Leviathan', hydra:'Hydra', charybdis:'Maw', shark:'Shark' };
+  let caveHover = null;
+
+  function updateCaveHover(){
+    let label = null;
+    if(mouseScreen && !menuOpen){
+      const r = app.view.getBoundingClientRect();
+      if(mouseScreen.x >= r.left && mouseScreen.x <= r.right && mouseScreen.y >= r.top && mouseScreen.y <= r.bottom){
+        const wx = (mouseScreen.x - r.left)*app.screen.width/r.width - world.x;
+        const wy = (mouseScreen.y - r.top)*app.screen.height/r.height - world.y;
+        const seen = (o)=> Math.hypot(o.x - player.x, o.y - player.y) < lightR*1.05;         // only what the light reveals
+        let bestD = Infinity;
+        for(const e of M.guards){
+          const d = Math.hypot(wx - e.x, wy - e.y) - (e.r + 12);
+          if(d < 0 && d < bestD && seen(e)){ bestD = d; label = (SPECIES[e.kind] || e.kind) + (e.shooter ? ' · spits shots' : ''); }
+        }
+        const b = M.boss;
+        if(b.active && !b.dead){
+          const d = Math.hypot(wx - b.x, wy - b.y) - (b.r + 12);
+          if(d < 0 && d < bestD && seen(b)) label = `${b.name} · ${SPECIES[b.kind] || b.kind} ${b.legend ? 'Legend' : 'Boss'}${b.elite ? ' (Elite)' : ''}`;
+        }
+      }
+    }
+    if(label !== caveHover){
+      if(caveHover) hideHoverLabel(caveHover);
+      if(label) showHoverLabel(label);
+      caveHover = label;
+    }
   }
 
   /* ---------------- sea-creature drawing (all vector, drawn each frame) ---------------- */
@@ -1331,21 +1595,32 @@ global.MoceanDungeons = function(ctx){
 
   function drawEnemy(e, now){
     const t = now*0.004 + e.ph;
+    const pal = e.shooter ? [0xff5a5a, 0xffd0d0] : undefined;      // red guardians spit shots
     if(e.kind === 'jelly'){
-      drawCreature(entG, 'jelly', e.x, e.y + Math.sin(t*1.5)*3, -Math.PI/2 + Math.sin(t)*0.12, 22, t, false);
+      drawCreature(entG, 'jelly', e.x, e.y + Math.sin(t*1.5)*3, -Math.PI/2 + Math.sin(t)*0.12, 22, t, false, pal);
       return;
     }
     const sp = Math.hypot(e.vx, e.vy);
     if(sp > 0.05) e.dir = (e.dirSet ? lerpAngle(e.dir, Math.atan2(e.vy, e.vx), 0.15) : Math.atan2(e.vy, e.vx));
     e.dirSet = true;
-    drawCreature(entG, e.kind, e.x, e.y + Math.sin(t*1.5)*2, e.dir || 0, 20, t, false);
+    drawCreature(entG, e.kind, e.x, e.y + Math.sin(t*1.5)*2, e.dir || 0, 20, t, false, pal);
   }
 
   function drawBoss(b, now){
     const t = now*0.004, flash = b.hit > 0;
-    if(b.state === 'wind'){                                     // telegraph ring
-      entG.lineStyle(3, 0xff4a4a, 0.35 + 0.35*Math.sin(now*0.03));
+    if(b.state === 'wind'){                                     // telegraph ring (purple = it is about to blink)
+      entG.lineStyle(3, b.atk === 'blink' ? 0xd59bff : 0xff4a4a, 0.35 + 0.35*Math.sin(now*0.03));
       entG.drawCircle(b.x, b.y, b.r + 16); entG.lineStyle(0);
+    }
+    if(b.elite && b.phase === 3){                               // enraged: a slow red pulse
+      entG.lineStyle(2, 0xff3a3a, 0.2 + 0.15*Math.sin(now*0.01));
+      entG.drawCircle(b.x, b.y, b.r + 8 + Math.sin(now*0.01)*4); entG.lineStyle(0);
+    }
+    if(b.shieldT > 0){                                          // bubble shield: nothing damages it
+      const k = clamp(b.shieldT/30, 0, 1), fl = 0.5 + 0.5*Math.sin(now*0.02);
+      entG.lineStyle(4, 0x9be8ff, (0.45 + 0.25*fl)*k); entG.drawCircle(b.x, b.y, b.r + 28);
+      entG.lineStyle(2, 0xffffff, 0.3*k); entG.drawCircle(b.x, b.y, b.r + 38 + fl*3);
+      entG.lineStyle(0); entG.beginFill(0x9be8ff, 0.06*k); entG.drawCircle(b.x, b.y, b.r + 28); entG.endFill();
     }
     if(b.kind === 'shark'){
       bossG.visible = true; bossG.x = b.x; bossG.y = b.y; bossG.rotation = b.ang;
@@ -1401,8 +1676,8 @@ global.MoceanDungeons = function(ctx){
     for(const e of M.guards) drawEnemy(e, now);
     if(!M.boss.dead) drawBoss(M.boss, now); else bossG.visible = false;
     for(const p of M.shots){
-      entG.lineStyle({ width:2.5, color:0xff6b6b, alpha:0.95, ...ROUND }); entG.drawCircle(p.x, p.y, 10);
-      entG.lineStyle(0); entG.beginFill(0xffb3b3, 0.9); entG.drawCircle(p.x, p.y, 3.5); entG.endFill();
+      entG.lineStyle({ width:2.5, color:p.home ? 0xff7ad9 : 0xff6b6b, alpha:0.95, ...ROUND }); entG.drawCircle(p.x, p.y, p.home ? 12 : 10);
+      entG.lineStyle(0); entG.beginFill(p.home ? 0xffd0f2 : 0xffb3b3, 0.9); entG.drawCircle(p.x, p.y, 3.5); entG.endFill();
     }
     for(const p of M.bubs){
       entG.lineStyle(p.big ? 4 : 2, p.pierce ? 0xffd36a : 0xcff6ff, 0.9);
@@ -1459,6 +1734,7 @@ global.MoceanDungeons = function(ctx){
     for(const id of TIMED){ if(TM[id] > 0) TM[id] -= dt; if(CD[id] > 0) CD[id] -= dt; }
     if(wasGhost && TM.ghost <= 0 && active && M) unstick();
 
+    updateUpgradeOffer(dt);
     refreshBar();
     drawAura(now);
     updateCompass();
@@ -1492,6 +1768,9 @@ global.MoceanDungeons = function(ctx){
       save.cleared = DUNGEONS.map(d=>d.id); persist();
       return [['All abilities unlocked.', 'ok']];
     }
+    if(sub === 'upgrades'){
+      return [[`Upgrades: ${save.up.hearts}/${UP_CAP.hearts} hearts (${maxHp()} total), ${save.up.rate}/${UP_CAP.rate} bubble rate (${Math.round(rateMul()*100)}%), ${save.up.str}/${UP_CAP.str} strength (${Math.round(strMul()*100)}%). ${upOwed()} pick(s) waiting. One pick every 3 levels.`, 'info']];
+    }
     if(sub === 'ready'){
       TIMED.forEach(id => { CD[id] = 0; }); dashCd = shieldCd = 0;
       return [['All ability cooldowns refreshed.', 'ok']];
@@ -1503,7 +1782,7 @@ global.MoceanDungeons = function(ctx){
       const p = exitPos(d, 260); player.x = p.x; player.y = p.y; player.vx = player.vy = 0; enterCd = 120;
       return [[`Teleported beside ${d.name}.`, 'ok']];
     }
-    const lines = [['Caves in order (/dungeon <1-20> teleports, exit, reset, unlock, ready):', 'info']];
+    const lines = [['Caves in order (/dungeon <1-20> teleports, exit, reset, unlock, ready, upgrades):', 'info']];
     for(const d of DUNGEONS){
       const ab = ABILITIES[d.ability], dx = d.x - player.x;
       const dir = Math.abs(dx) < 100 ? 'right here' : (dx > 0 ? 'east ' : 'west ') + Math.round(Math.abs(dx)/8) + ' m';
@@ -1516,6 +1795,8 @@ global.MoceanDungeons = function(ctx){
   return {
     get active(){ return active; },
     get _state(){ return M; },
+    get menuOpen(){ return menuOpen; },
+    resetUpgrades,
     update, updatePlayer, handleKey, fire, look, speedMul, gravityMul, levelBonus, eatMul, depth, command, DUNGEONS
   };
 };
