@@ -54,7 +54,7 @@
 global.MoceanDungeons = function(ctx){
   const { app, world, player, keys, rand, randi, clamp, lerpAngle, floorY,
           PLAYER_COLORS, SHARK_COLORS, drawFishShape, view, hideWhenInside, addXP, popText,
-          burstBubbles, playBlip, isStarted, getLevel, mouseScreen, showHoverLabel, hideHoverLabel } = ctx;
+          burstBubbles, playBlip, isStarted, getLevel, getDifficulty, mouseScreen, showHoverLabel, hideHoverLabel } = ctx;
 
   const SAVE_KEY = 'mocean.dungeons.v2';
   const OLD_SAVE_KEY = 'mocean.dungeons.v1';
@@ -136,7 +136,7 @@ global.MoceanDungeons = function(ctx){
   /* Abilities. dur/cd are in frames (60 = 1 s). caveOnly abilities do nothing in the open ocean,
      so they don't spend their cooldown there. Entries without dur/cd are the original toggles / passives. */
   const ABILITIES = {
-    shapeshift: { name:'Shapeshift',       key:'F',     desc:'Morph into a shark or a glass minnow' },
+    shapeshift: { name:'Shapeshift',       key:'F',     desc:'Morph into a shark (bigger, 2x-damage bubbles) or a glass minnow' },
     dash:       { name:'Tidal Dash',       key:'Shift', desc:'Burst of speed' },
     glow:       { name:'Biolight',         key:'G',     desc:'Glow to light up dark caves' },
     shield:     { name:'Bubble Shield',    key:'B',     desc:'Guardians pass right through you' },
@@ -188,7 +188,16 @@ global.MoceanDungeons = function(ctx){
 
   const UP_CAP = { hearts:7, rate:8, str:10 };
   const UP_KEYS = ['hearts', 'rate', 'str'];
-  const maxHp   = ()=> BASE_HP + save.up.hearts;
+  /* Difficulty (Options menu) scales the caves: guardian count/speed/shooters, boss health, shot speed,
+     how long bosses rest between attacks, hearts, hit-immunity time and the XP you earn. */
+  const DIFF = {
+    peaceful:{ guards:0.5, speed:0.8, shooter:0,   bossHp:0.7, shot:0.85, rest:1.3, hearts:2,  inv:160, xp:0.75 },
+    normal:  { guards:1,   speed:1,   shooter:1,   bossHp:1,   shot:1,    rest:1,   hearts:0,  inv:110, xp:1 },
+    hard:    { guards:1.4, speed:1.2, shooter:1.5, bossHp:1.4, shot:1.15, rest:0.8, hearts:-1, inv:80,  xp:1.25 }
+  };
+  const dif = ()=> DIFF[getDifficulty ? getDifficulty() : 'normal'] || DIFF.normal;
+  const gain = (n, label)=> addXP(Math.max(1, Math.round(n*dif().xp)), label);
+  const maxHp   = ()=> Math.max(3, BASE_HP + save.up.hearts + dif().hearts);
   const rateMul = ()=> 1 + 0.12*save.up.rate;          // bubble fire rate
   const strMul  = ()=> 1 + 0.25*save.up.str;           // damage to guardians and bosses
   const upUsed  = ()=> save.up.hearts + save.up.rate + save.up.str;
@@ -437,7 +446,7 @@ global.MoceanDungeons = function(ctx){
     const e = M.guards[k];
     e.hp -= n*strMul();
     if(e.hp > 0) return false;
-    M.guards.splice(k, 1); burstBubbles(e.x, e.y, 8); addXP(2 + M.d.id);
+    M.guards.splice(k, 1); burstBubbles(e.x, e.y, 8); gain(2 + M.d.id);
     return true;
   }
   function openAhead(dist){                       // the farthest open point in front of the player, up to dist
@@ -765,18 +774,19 @@ global.MoceanDungeons = function(ctx){
     const minDist = Math.min(6, Math.floor(m.dist[m.orbCell[1]][m.orbCell[0]] * 0.6));
     let far = cells.filter(([x,y])=> m.dist[y][x] >= minDist);
     if(!far.length) far = cells;
-    const guards = [];
-    for(let i=0;i<d.guards;i++){
+    const guards = [], df = dif();
+    const guardCount = Math.max(2, Math.round(d.guards*df.guards));
+    for(let i=0;i<guardCount;i++){
       const [cx,cy] = far[randi(0, far.length-1)];
       const p = cellPos(cx,cy);
       guards.push({ kind:d.enemies[randi(0, d.enemies.length-1)], hp:2 + Math.floor(d.id/4), dir:0,
                     cx, cy, x:p.x, y:p.y, tx:p.x, ty:p.y, ncx:cx, ncy:cy,
-                    speed: 0.85 + d.id*0.075 + rand(0,0.25), r:22, ph:rand(0,6), vx:0, vy:0,
-                    shooter: d.id >= 5 && Math.random() < Math.min(0.6, 0.06*(d.id - 3)),   // deeper guardians spit shots
+                    speed: (0.85 + d.id*0.075 + rand(0,0.25))*df.speed, r:22, ph:rand(0,6), vx:0, vy:0,
+                    shooter: d.id >= 5 && Math.random() < Math.min(0.75, 0.06*(d.id - 3))*df.shooter,   // deeper guardians spit shots
                     cd: rand(60, 160) });
     }
     const A = m.arena, ac = { x:(A.x0 + A.w/2)*T, y:(A.y0 + A.h/2)*T };
-    const hp = d.bossHp, elite = d.id >= 10, tier = Math.max(0, d.id - 9);
+    const hp = Math.max(5, Math.round(d.bossHp*df.bossHp)), elite = d.id >= 10, tier = Math.max(0, d.id - 9);
     const boss = Object.assign({ hp, max:hp, x:ac.x + 200, y:ac.y, vx:0, vy:0, ang:Math.PI, state:'idle',
                                  t:0, hit:0, active:false, dead:false, atk:'charge', tx:ac.x, ty:ac.y,
                                  elite, tier, armor: elite ? Math.min(0.25, 0.025*tier) : 0,
@@ -899,7 +909,7 @@ global.MoceanDungeons = function(ctx){
 
   function damagePlayer(fx, fy, n){
     n = n || 1;
-    M.php -= n; invuln = 110;
+    M.php -= n; invuln = dif().inv;
     const a = Math.atan2(player.y - fy, player.x - fx);
     player.vx += Math.cos(a)*9; player.vy += Math.sin(a)*9;
     burstBubbles(player.x, player.y, 10); playBlip();
@@ -911,11 +921,14 @@ global.MoceanDungeons = function(ctx){
     M.fireCd = 11 / (TM.rapid > 0 ? 2.6 : 1) / rateMul();         // Rapid Bubbles x the Bubble Rate upgrade
     const a = player.displayAngle, pierce = TM.pierce > 0;       // Piercing Bubbles
     const spread = TM.triple > 0 ? [-0.3, 0, 0.3] : [0];         // Triple Shot
+    const shark = save.form === 'shark';                         // Shark form: bigger bubbles that hit twice as hard
     for(const o of spread){
-      const aa = a + o;
-      M.bubs.push({ x:player.x + Math.cos(aa)*20, y:player.y + Math.sin(aa)*20,
-                    vx:Math.cos(aa)*13 + player.vx*0.3, vy:Math.sin(aa)*13 + player.vy*0.3, life:80,
-                    dmg:pierce ? 2 : 1, pierce, hits:[] });
+      const aa = a + o, reach = shark ? 30 : 20;
+      const b = { x:player.x + Math.cos(aa)*reach, y:player.y + Math.sin(aa)*reach,
+                  vx:Math.cos(aa)*(shark ? 14 : 13) + player.vx*0.3, vy:Math.sin(aa)*(shark ? 14 : 13) + player.vy*0.3, life:shark ? 90 : 80,
+                  dmg:(pierce ? 2 : 1)*(shark ? 2 : 1), pierce, hits:[] };
+      if(shark){ b.r = 13; b.big = true; }
+      M.bubs.push(b);
     }
   }
 
@@ -954,10 +967,10 @@ global.MoceanDungeons = function(ctx){
       save.cleared.push(d.id); persist();
       const ab = ABILITIES[d.ability];
       showBanner('Ability unlocked', ab.name, `${ab.desc}  ·  press ${ab.key}`);
-      addXP(120*d.id, 'Cave cleared!');
+      gain(120*d.id, 'Cave cleared!');
     } else {
       showBanner('Cave cleared', d.name, 'The relic hums softly.');
-      addXP(25*d.id, 'Relic');
+      gain(25*d.id, 'Relic');
     }
     setTimeout(()=>{ if(active && M && M.d === d) exitDungeon(); }, 3200);
   }
@@ -980,7 +993,7 @@ global.MoceanDungeons = function(ctx){
     return base.concat(extra, extra);                   // they lean on the new tricks
   }
 
-  function shoot(x, y, a, sp, extra){ M.shots.push(Object.assign({ x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, life:240 }, extra)); }
+  function shoot(x, y, a, sp, extra){ sp *= dif().shot; M.shots.push(Object.assign({ x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, life:240 }, extra)); }
 
   // where to aim so a shot of speed sp meets the player: elites lead their target instead of firing at where you were
   function leadAngle(b, sp, k){
@@ -1004,7 +1017,7 @@ global.MoceanDungeons = function(ctx){
     let rage;
     if(b.elite) rage = 1 + (1 - frac)*(0.35 + 0.025*tier) + (b.legend ? 0.08 : 0);       // elites ramp up as they bleed
     else rage = b.legend ? 1 + (1 - frac)*0.5 : (frac < 0.5 ? 1.15 : 1);                  // legends get angrier as they bleed
-    const rt = b.elite ? 0.72 : 1;                                                         // elites rest less between attacks
+    const rt = (b.elite ? 0.72 : 1)*dif().rest;                                                         // elites rest less between attacks
     const x0 = A.x0*T + b.r, x1 = (A.x0 + A.w)*T - b.r, y0 = A.y0*T + b.r, y1 = (A.y0 + A.h)*T - b.r;
     if(!camo){ b.lkx = player.x; b.lky = player.y; }                                       // Camouflage: it can't find you
     const toP = camo ? b.ang : Math.atan2(player.y - b.y, player.x - b.x);
@@ -1130,12 +1143,13 @@ global.MoceanDungeons = function(ctx){
     b.dead = true; M.orbOn = true; M.shots.length = 0;
     if(M.sealed){ M.sealed = false; setDoor(false); }
     for(let i=0;i<4;i++) burstBubbles(b.x + rand(-40,40), b.y + rand(-40,40), 12);
-    addXP((d.legend ? 100 : 60)*d.id, d.legend ? 'Sea Legend slain!' : 'Boss defeated!');
+    gain((d.legend ? 100 : 60)*d.id, d.legend ? 'Sea Legend slain!' : 'Boss defeated!');
     showBanner(d.legend ? 'Sea Legend defeated' : 'Boss defeated', b.name, 'Take the glowing relic!');
   }
 
   function updateDungeon(dt, now){
     M.frame++;
+    if(M.php > maxHp()){ M.php = maxHp(); caveHud._key = null; }
     const pr = player.size * look().size * 0.75;
     const ptx = Math.floor(player.x/T), pty = Math.floor(player.y/T);
     for(let dy=-3; dy<=3; dy++) for(let dx=-3; dx<=3; dx++){
@@ -1234,7 +1248,7 @@ global.MoceanDungeons = function(ctx){
         if(dd < 520 && dd > 1){ const st = Math.min(dd, 7)*dt; p.x += dx/dd*st; p.y += dy/dd*st; }
       }
       if(Math.hypot(player.x - p.x, player.y - p.y) < 42 + pr){
-        p.got = true; addXP(5 + 3*M.d.id, 'Pearl'); burstBubbles(p.x, p.y, 6); playBlip();
+        p.got = true; gain(5 + 3*M.d.id, 'Pearl'); burstBubbles(p.x, p.y, 6); playBlip();
       }
     }
 
