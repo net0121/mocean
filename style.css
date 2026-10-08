@@ -456,39 +456,38 @@ html,body{
 
 .touch-area {
   position:fixed;
-  bottom:20px;
-  left:50%;
-  transform:translateX(-50%);
-  width:200px;
-  height:200px;
-  border-radius:50%;
-  border:2px dashed rgba(223,246,255,0.25);
-  background:rgba(6,18,28,0.3);
+  inset:0;
   pointer-events:auto;
   touch-action:none;
+  -webkit-tap-highlight-color:transparent;
 }
 
 .touch-hint {
   position:fixed;
-  bottom:230px;
+  bottom:100px;
   left:50%;
   transform:translateX(-50%);
-  color:rgba(223,246,255,0.5);
+  color:rgba(223,246,255,0.6);
   font-size:13px;
   letter-spacing:1px;
   pointer-events:none;
   text-transform:uppercase;
+  text-align:center;
+  transition:opacity 0.6s ease;
 }
 
 .touch-knob {
-  position:absolute;
-  width:48px;
-  height:48px;
+  position:fixed;
+  left:0; top:0;
+  width:56px;
+  height:56px;
   border-radius:50%;
-  background:rgba(255,157,92,0.6);
-  border:2px solid rgba(255,157,92,0.8);
-  box-shadow:0 0 12px rgba(255,157,92,0.4);
+  background:rgba(255,157,92,0.35);
+  border:2px solid rgba(255,157,92,0.85);
+  box-shadow:0 0 14px rgba(255,157,92,0.45);
   pointer-events:none;
+  opacity:0;
+  z-index:11;
   transform:translate(-50%, -50%);
   transition:opacity 0.2s ease;
 }
@@ -501,6 +500,27 @@ html,body{
   .touch-area { display:none; }
   .touch-hint { display:none; }
 }
+
+/* Fullscreen toggle (always available, above the title screen) */
+#fullscreen-button{
+  position:fixed;
+  left:max(14px, env(safe-area-inset-left));
+  bottom:max(14px, env(safe-area-inset-bottom));
+  width:44px;
+  height:44px;
+  border-radius:50%;
+  border:1px solid rgba(223,246,255,0.4);
+  background:rgba(2,16,25,0.6);
+  color:var(--foam);
+  font-size:20px;
+  line-height:1;
+  cursor:pointer;
+  z-index:120;
+  touch-action:manipulation;
+  user-select:none;
+  -webkit-tap-highlight-color:transparent;
+}
+#fullscreen-button:active{ background:rgba(255,157,92,0.5); }
 
 /* Touch jump button (only on touch devices) */
 #jump-button{
@@ -532,7 +552,8 @@ html,body{
 
 #ability-bar{
   position:fixed; right:14px; bottom:140px;
-  display:none; flex-direction:column; align-items:flex-end; gap:6px;
+  display:none; flex-direction:column; flex-wrap:wrap-reverse; align-items:flex-end; align-content:flex-start; gap:5px;
+  max-height:calc(100vh - 340px);
   z-index:12; font-family:'Roboto Mono', monospace;
 }
 .ability-chip{
@@ -540,12 +561,15 @@ html,body{
   color:var(--foam);
   border:1px solid rgba(223,246,255,0.3);
   border-radius:14px;
-  padding:6px 12px;
-  font-family:inherit; font-size:12px; letter-spacing:0.3px;
+  padding:5px 10px;
+  font-family:inherit; font-size:11.5px; letter-spacing:0.3px;
   cursor:pointer; touch-action:none; user-select:none;
 }
 .ability-chip.on{ border-color:#ffc08f; box-shadow:0 0 10px rgba(255,157,92,0.5); color:#ffc08f; }
-.ability-chip.cd{ opacity:0.45; }
+.ability-chip.cd{   /* fills left-to-right as the cooldown recovers (--cd is set from dungeons.js) */
+  background:linear-gradient(90deg, rgba(255,157,92,0.38) var(--cd,0%), rgba(2,16,25,0.65) var(--cd,0%));
+  color:rgba(223,246,255,0.7);
+}
 
 #dungeon-map{
   position:fixed; top:14px; right:14px;
@@ -582,3 +606,27 @@ html,body{
 #cave-compass .cc-arrow{ font-size:26px; color:#ffc08f; line-height:1; }
 #cave-compass .cc-label{ font-size:12px; margin-top:2px; white-space:nowrap; }
 #cave-compass .cc-where{ font-size:10px; opacity:0.7; white-space:nowrap; }
+
+/* ============================= LEGENDS & BIOMES ============================= */
+
+#cave-hud .boss-name.legend{ color:#ffd36a; font-size:15px; letter-spacing:3px; text-shadow:0 0 12px rgba(255,211,106,0.6), 0 1px 4px rgba(0,0,0,0.9); }
+#cave-hud .boss-bar.legend{ width:380px; height:12px; border-color:rgba(255,211,106,0.7); box-shadow:0 0 10px rgba(255,211,106,0.25); }
+#cave-hud .boss-bar.legend div{ background:linear-gradient(90deg,#ff9d3a,#ffe28a); }
+
+#biome-label{
+  margin-top:6px;
+  font-family:'Roboto Mono', monospace;
+  font-size:11px; letter-spacing:1.5px; text-transform:uppercase;
+  color:#9be8ff; opacity:0.9;
+}
+
+#biome-banner{
+  position:fixed; left:50%; top:16%;
+  transform:translate(-50%, 0);
+  text-align:center; opacity:0; z-index:44;
+  pointer-events:none; user-select:none;
+  text-shadow:0 2px 12px rgba(0,0,0,0.8);
+}
+#biome-banner .bb-small{ color:#9be8ff; font-size:12px; letter-spacing:6px; text-transform:uppercase; }
+#biome-banner .bb-big{ color:var(--foam); font-size:34px; font-weight:700; letter-spacing:3px; }
+#biome-banner.show{ animation:levelPop 3s ease-out forwards; }
