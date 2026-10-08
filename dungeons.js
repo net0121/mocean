@@ -1,24 +1,44 @@
 /* =============================================================================
-   dungeons.js — 5 seafloor caves with randomly generated mazes, plus the
-   abilities you earn by clearing them.
+   dungeons.js — 20 seafloor caves with randomly generated mazes, 20 bosses
+   (9 of them Mythical Sea Legends) and the abilities you earn by clearing them.
 
-   Each cave entrance sits on the seafloor. Swim into the dark mouth to enter.
-   Inside: a fresh random maze every visit, patrolling guardians, pearls in the
-   dead ends (XP) and a glowing relic at the farthest point. Grab the relic
-   to clear the cave. The first clear of each cave unlocks an ability:
+   The caves sit in a line heading east, evenly spaced and in order of difficulty
+   (see biomes.js for the biome each one lives in). Swim into the dark mouth to
+   enter. Inside: a fresh random maze every visit, patrolling guardians, pearls
+   in the dead ends (XP) and a glowing relic behind the boss. Space fires bubbles,
+   you have 5 hearts, and the relic only appears once the boss is beaten.
+   The first clear of each cave unlocks an ability:
 
-     1 Coral Hollow    -> Shapeshift   (F)      fish / shark / glass minnow
-     2 Kelp Labyrinth  -> Tidal Dash   (Shift)  burst of speed
-     3 Glimmer Grotto  -> Biolight     (G)      glow, see further in caves
-     4 Abyssal Vault   -> Bubble Shield(B)      guardians pass through you
-     5 Tidal Temple    -> Sea Wings    (hold Space in the air) glide
+     #  Cave                  Boss                              Ability (key)
+     1  Coral Hollow          Claw Baron                        Shapeshift (F)
+     2  Anemone Maze          Captain Bloat                     Rapid Bubbles (Q)
+     3  Glimmer Grotto        Lantern King                      Biolight (G)
+     4  Kelp Labyrinth        Kelp Strangler                    Tidal Dash (Shift)
+     5  Sargasso Tangle       Sargasso Queen                    Triple Shot (E)
+     6  Siren's Cove          * Lorelei, the Siren Queen        Tide Heal (T)
+     7  Drowned Citadel       Iron Lobster Warlord              Pearl Magnet (U)
+     8  Shipwreck Graveyard   * The Flying Dutchman             Camouflage (C)
+     9  Tidal Temple          Tidal Megalodon                   Sea Wings (hold Space)
+    10  Ember Vents           Magma Manta                       Ink Cloud (Y)
+    11  Obsidian Forge        * Ryujin, the Dragon King         Whirlpool (V)
+    12  Thunder Spire         Thunder Eel Tyrant                Chain Lightning (Z)
+    13  Frostbite Cavern      Great White Frostjaw              Piercing Bubbles (R)
+    14  Glacier Gullet        * Aspidochelone, Island Turtle    Sonar Ping (O)
+    15  Midgard Deep          * Jormungandr, World Serpent      Time Ripple (I)
+    16  Twilight Bloom        * The Sea Hydra                   Riptide (P)
+    17  Lantern Warren        Deepglow Matriarch                Ghost Current (N)
+    18  Abyssal Vault         * Abyss Kraken                    Bubble Shield (B)
+    19  Charybdis Maw         * Charybdis, the Devouring Maw    Pearl Cannon (X)
+    20  Leviathan's Throne    * Leviathan, the Sea Serpent King Tsunami (M)
 
-   Every cave ends in a boss arena. Space fires bubbles inside caves, you have
-   3 hearts, and the relic only appears once the boss is beaten. Caves 2, 3 and
-   5 float in open water; an edge-of-screen compass points to the nearest
-   uncleared cave.
+   (* = Mythical Sea Legend: a bigger arena, a longer health bar, spiral attacks
+   and a boss that gets steadily angrier as it loses health.)
 
-   Loaded after fish.js, before game.js. game.js calls MoceanDungeons(ctx).
+   Every ability that is not a toggle has a duration and a cooldown; its chip in
+   the ability bar fills as the cooldown recovers. An edge-of-screen compass
+   points to the next uncleared cave in order.
+
+   Loaded after biomes.js and fish.js, before game.js. game.js calls MoceanDungeons(ctx).
    ============================================================================= */
 (function(global){
 "use strict";
@@ -28,33 +48,97 @@ global.MoceanDungeons = function(ctx){
           PLAYER_COLORS, SHARK_COLORS, drawFishShape, view, hideWhenInside, addXP, popText,
           burstBubbles, playBlip, isStarted } = ctx;
 
-  const SAVE_KEY = 'mocean.dungeons.v1';
+  const SAVE_KEY = 'mocean.dungeons.v2';
+  const OLD_SAVE_KEY = 'mocean.dungeons.v1';
+  const OLD_TO_NEW = { 1:1, 2:4, 3:3, 4:18, 5:9 };   // v1 cave numbers -> their place in the new order
+  const BIO = MoceanBiomes;
   const T = 110; // maze tile size in world units
   const MAX_HP = 5;
   const ROUND = { cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND };
 
   /* ---------------------------------------------------------------- data */
 
-  const DUNGEONS = [
-    { id:1, name:'Coral Hollow',   x: 2200, mw:5,  mh:4, guards:3, wall:0x2b6f78, floor:0x0a2a33, accent:0x7fe8d4, ability:'shapeshift',
-      enemies:['crab','urchin'], boss:{ kind:'crab',   name:'Claw Baron',      r:60 } },
-    { id:2, name:'Kelp Labyrinth', x:-3400, floatY:3000, mw:7,  mh:5, guards:4, wall:0x2f6b3a, floor:0x0b2412, accent:0xb6ff7a, ability:'dash',
-      enemies:['eel','puffer'], boss:{ kind:'eel',    name:'Kelp Strangler',  r:42 } },
-    { id:3, name:'Glimmer Grotto', x: 5600, floatY:5200, mw:8,  mh:6, guards:5, wall:0x5a3a8a, floor:0x150b2a, accent:0xd59bff, ability:'glow',
-      enemies:['jelly','angler'], boss:{ kind:'angler', name:'Lantern King',    r:58 } },
-    { id:4, name:'Abyssal Vault',  x:-8200, mw:10, mh:7, guards:6, wall:0x7a2f3f, floor:0x2a0b13, accent:0xff7a8f, ability:'shield',
-      enemies:['urchin','angler','eel'], boss:{ kind:'kraken', name:'Abyss Kraken', r:62 } },
-    { id:5, name:'Tidal Temple',   x:11000, floatY:1100, mw:12, mh:8, guards:8, wall:0x8a7a3a, floor:0x2a230b, accent:0xffe28a, ability:'wings',
-      enemies:['jelly','crab','puffer','eel'], boss:{ kind:'shark', name:'Tidal Megalodon', r:60 } }
+  // one row per cave, in the order you meet them heading east. x comes from biomes.js (even spacing).
+  // legend:true  -> Mythical Sea Legend (bigger arena, more health, spiral attacks)
+  const RAW = [
+    [ 1,'Coral Hollow',        5,4,3, 0x2b6f78,0x0a2a33,0x7fe8d4, 0,    'shapeshift', ['crab','urchin'],
+      { kind:'crab',   name:'Claw Baron',                      r:60 } ],
+    [ 2,'Anemone Maze',        5,4,3, 0x8a3a6f,0x2a0b22,0xff9bd2, 0,    'rapid',      ['puffer','urchin'],
+      { kind:'puffer', name:'Captain Bloat',                   r:54 } ],
+    [ 3,'Glimmer Grotto',      6,5,4, 0x5a3a8a,0x150b2a,0xd59bff, 5200, 'glow',       ['jelly','angler'],
+      { kind:'angler', name:'Lantern King',                    r:58 } ],
+    [ 4,'Kelp Labyrinth',      7,5,4, 0x2f6b3a,0x0b2412,0xb6ff7a, 3000, 'dash',       ['eel','puffer'],
+      { kind:'eel',    name:'Kelp Strangler',                  r:44 } ],
+    [ 5,'Sargasso Tangle',     7,5,5, 0x4a6a2a,0x141f0b,0xe0ff7a, 0,    'triple',     ['jelly','eel'],
+      { kind:'jelly',  name:'Sargasso Queen',                  r:58, pal:[0x7fe8a8,0xd5ff9b] } ],
+    [ 6,"Siren's Cove",        8,6,5, 0x3a7a9a,0x0b2330,0xa8f0ff, 2400, 'heal',       ['jelly','puffer','eel'],
+      { kind:'siren',  name:'Lorelei, the Siren Queen',        r:70, legend:true } ],
+    [ 7,'Drowned Citadel',     8,6,5, 0x5a6068,0x14171c,0xcfd8e4, 0,    'magnet',     ['crab','eel','urchin'],
+      { kind:'crab',   name:'Iron Lobster Warlord',            r:68, pal:[0x9aa8b8,0xe6f0ff] } ],
+    [ 8,'Shipwreck Graveyard', 9,6,6, 0x6a4e33,0x1f150b,0xe8c88a, 0,    'camo',       ['eel','crab','angler'],
+      { kind:'ghostship', name:'The Flying Dutchman',          r:84, legend:true } ],
+    [ 9,'Tidal Temple',        9,7,6, 0x8a7a3a,0x2a230b,0xffe28a, 1100, 'wings',      ['jelly','crab','puffer','eel'],
+      { kind:'shark',  name:'Tidal Megalodon',                 r:60 } ],
+    [10,'Ember Vents',        10,7,6, 0x7a3a22,0x2a0f08,0xff9d5c, 0,    'ink',        ['urchin','puffer','crab'],
+      { kind:'ray',    name:'Magma Manta',                     r:62 } ],
+    [11,'Obsidian Forge',     10,7,7, 0x5a2a2a,0x1f0a0a,0xff6a3a, 0,    'whirl',      ['crab','eel','urchin'],
+      { kind:'dragon', name:'Ryujin, the Dragon King',         r:76, legend:true } ],
+    [12,'Thunder Spire',      11,7,7, 0x6a5a1f,0x241f08,0xffe14d, 3800, 'chain',      ['eel','jelly','puffer'],
+      { kind:'eel',    name:'Thunder Eel Tyrant',              r:56, pal:[0xffe14d,0xffffff] } ],
+    [13,'Frostbite Cavern',   11,8,7, 0x5a8aa8,0x0e2230,0xdff6ff, 0,    'pierce',     ['puffer','urchin','jelly'],
+      { kind:'shark',  name:'Great White Frostjaw',            r:66, cols:{ body:0xe8f4ff, fin:0xffffff } } ],
+    [14,'Glacier Gullet',     12,8,8, 0x4a7a9a,0x0b1f30,0xbfe9ff, 1700, 'sonar',      ['jelly','angler','eel'],
+      { kind:'turtle', name:'Aspidochelone, the Island Turtle', r:88, legend:true } ],
+    [15,'Midgard Deep',       12,8,8, 0x3a4a8a,0x0a0f2a,0x9bb8ff, 0,    'ripple',     ['eel','crab','angler'],
+      { kind:'serpent', name:'Jormungandr, the World Serpent', r:80, legend:true, pal:[0x7aa8ff,0xdff6ff] } ],
+    [16,'Twilight Bloom',     13,8,8, 0x6a3a8a,0x1a0b2a,0xff7ad9, 0,    'riptide',    ['jelly','urchin','angler'],
+      { kind:'hydra',  name:'The Sea Hydra',                   r:78, legend:true } ],
+    [17,'Lantern Warren',     13,9,9, 0x2a7a6a,0x082420,0x58ffd8, 6300, 'ghost',      ['angler','jelly','eel'],
+      { kind:'angler', name:'Deepglow Matriarch',              r:70, pal:[0x58e0d0,0xa8ffe8] } ],
+    [18,'Abyssal Vault',      14,9,9, 0x7a2f3f,0x2a0b13,0xff7a8f, 0,    'shield',     ['urchin','angler','eel'],
+      { kind:'kraken', name:'Abyss Kraken',                    r:72, legend:true } ],
+    [19,'Charybdis Maw',      14,9,10, 0x2a2a5a,0x0b0b1f,0x7a9bff, 4600, 'cannon',    ['jelly','angler','crab','eel'],
+      { kind:'charybdis', name:'Charybdis, the Devouring Maw', r:84, legend:true } ],
+    [20,"Leviathan's Throne", 15,10,10, 0x3a2a6a,0x0e0a22,0xffd36a, 0,   'tsunami',    ['eel','angler','jelly','crab','puffer'],
+      { kind:'leviathan', name:'Leviathan, the Sea Serpent King', r:92, legend:true } ]
   ];
 
+  const DUNGEONS = RAW.map(([id, name, mw, mh, guards, wall, floor, accent, floatY, ability, enemies, boss])=>{
+    const d = { id, name, x:BIO.dungeonX(id), mw, mh, guards, wall, floor, accent, ability, enemies, boss };
+    if(floatY) d.floatY = floatY;
+    d.rock = BIO.mixHex(wall, 0x202028, 0.45);          // entrance rock colour
+    d.biome = BIO.biomeForCave(id);
+    d.legend = !!boss.legend;
+    boss.legend = d.legend;
+    return d;
+  });
+
+  /* Abilities. dur/cd are in frames (60 = 1 s). caveOnly abilities do nothing in the open ocean,
+     so they don't spend their cooldown there. Entries without dur/cd are the original toggles / passives. */
   const ABILITIES = {
-    shapeshift: { name:'Shapeshift',    key:'F',     desc:'Morph into a shark or a glass minnow' },
-    dash:       { name:'Tidal Dash',    key:'Shift', desc:'Burst of speed' },
-    glow:       { name:'Biolight',      key:'G',     desc:'Glow to light up dark caves' },
-    shield:     { name:'Bubble Shield', key:'B',     desc:'Guardians pass right through you' },
-    wings:      { name:'Sea Wings',     key:'Space', desc:'Hold Space in the air to glide' }
+    shapeshift: { name:'Shapeshift',       key:'F',     desc:'Morph into a shark or a glass minnow' },
+    dash:       { name:'Tidal Dash',       key:'Shift', desc:'Burst of speed' },
+    glow:       { name:'Biolight',         key:'G',     desc:'Glow to light up dark caves' },
+    shield:     { name:'Bubble Shield',    key:'B',     desc:'Guardians pass right through you' },
+    wings:      { name:'Sea Wings',        key:'Space', desc:'Hold Space in the air to glide' },
+
+    rapid:   { name:'Rapid Bubbles',    key:'Q', dur:360, cd:900,  caveOnly:true,  desc:'Fire bubbles 2.6x faster for 6 s' },
+    triple:  { name:'Triple Shot',      key:'E', dur:480, cd:1080, caveOnly:true,  desc:'Bubbles fly in a 3-way fan for 8 s' },
+    heal:    { name:'Tide Heal',        key:'T',          cd:2700, caveOnly:true,  desc:'Restore 2 hearts' },
+    magnet:  { name:'Pearl Magnet',     key:'U', dur:600, cd:1500,                desc:'Pearls fly to you and you eat from further away for 10 s' },
+    camo:    { name:'Camouflage',       key:'C', dur:360, cd:1680, caveOnly:true,  desc:'Guardians and bosses lose track of you for 6 s' },
+    ink:     { name:'Ink Cloud',        key:'Y', dur:360, cd:1320, caveOnly:true,  desc:'A cloud that blinds and slows guardians and eats enemy shots' },
+    whirl:   { name:'Whirlpool',        key:'V', dur:240, cd:1800, caveOnly:true,  desc:'A vortex that drags guardians in and shreds them' },
+    chain:   { name:'Chain Lightning',  key:'Z',          cd:1200, caveOnly:true,  desc:'Zap up to 4 enemies for 2 damage each' },
+    pierce:  { name:'Piercing Bubbles', key:'R', dur:420, cd:1200, caveOnly:true,  desc:'Bubbles punch through enemies and hit twice as hard for 7 s' },
+    sonar:   { name:'Sonar Ping',       key:'O',          cd:1500,                desc:'Reveal the whole cave map (or point to the next cave)' },
+    ripple:  { name:'Time Ripple',      key:'I', dur:240, cd:1800, caveOnly:true,  desc:'Everything hostile slows to 40% for 4 s' },
+    riptide: { name:'Riptide',          key:'P',          cd:1500, caveOnly:true,  desc:'Shockwave: 2 damage and a big shove to everything near you' },
+    ghost:   { name:'Ghost Current',    key:'N', dur:150, cd:2400, caveOnly:true,  desc:'Swim through cave walls for 2.5 s (not during a boss fight)' },
+    cannon:  { name:'Pearl Cannon',     key:'X',          cd:1320, caveOnly:true,  desc:'One giant piercing bubble: 6 damage' },
+    tsunami: { name:'Tsunami',          key:'M',          cd:3600, caveOnly:true,  desc:'A wave wipes enemy shots and hits everything hard' }
   };
+  const TIMED = Object.keys(ABILITIES).filter(id => ABILITIES[id].cd);   // the 15 new cooldown abilities
 
   const FORMS = {
     fish:   { name:'Reef Fish',    colors:PLAYER_COLORS,                    size:1.0,  speed:1.0,  level:0 },
@@ -69,6 +153,13 @@ global.MoceanDungeons = function(ctx){
   try{
     const raw = localStorage.getItem(SAVE_KEY);
     if(raw) Object.assign(save, JSON.parse(raw));
+    else {
+      const old = JSON.parse(localStorage.getItem(OLD_SAVE_KEY) || 'null');     // carry over a v1 save
+      if(old){
+        save.cleared = (old.cleared || []).map(n => OLD_TO_NEW[n]).filter(Boolean);
+        save.form = old.form || 'fish'; save.glow = !!old.glow;
+      }
+    }
   }catch(err){}
   function persist(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(save)); }catch(err){} }
 
@@ -127,7 +218,7 @@ global.MoceanDungeons = function(ctx){
   bar.id = 'ability-bar';
   document.body.appendChild(bar);
   const chips = {};
-  for(const id of Object.keys(ABILITIES)){
+  for(const id of DUNGEONS.map(d => d.ability)){
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'ability-chip';
     b.addEventListener('pointerdown', (e)=>{ e.preventDefault(); e.stopPropagation(); activate(id); });
@@ -166,13 +257,9 @@ global.MoceanDungeons = function(ctx){
   // edge-of-screen arrow pointing at the nearest cave you haven't cleared yet
   function updateCompass(){
     if(!isStarted() || active){ compass.style.display = 'none'; return; }
-    let best = null, bd = Infinity;
-    for(const d of DUNGEONS){
-      if(save.cleared.includes(d.id)) continue;
-      const dd = Math.hypot(d.x - player.x, mouthY(d) - player.y);
-      if(dd < bd){ bd = dd; best = d; }
-    }
+    const best = nextCave();                              // the lowest-numbered cave you haven't cleared
     if(!best){ compass.style.display = 'none'; return; }
+    const bd = Math.hypot(best.x - player.x, mouthY(best) - player.y);
     const W = app.screen.width, H = app.screen.height;
     const dx = best.x - player.x, dy = mouthY(best) - player.y;
     if(Math.abs(dx) < W/2 - 110 && Math.abs(dy) < H/2 - 70){ compass.style.display = 'none'; return; }
@@ -181,17 +268,26 @@ global.MoceanDungeons = function(ctx){
     compass.style.left = (W/2 + dx*k) + 'px';
     compass.style.top = (H/2 + dy*k) + 'px';
     ccArrow.style.transform = `rotate(${Math.atan2(dy, dx) + Math.PI/2}rad)`;
-    ccLabel.textContent = `${best.id}. ${best.name} · ${Math.round(bd/8)} m`;
-    ccWhere.textContent = best.floatY ? `floats in open water, ~${Math.round(best.floatY/8)} m deep` : 'rests on the seafloor';
+    ccLabel.textContent = `Next: ${best.id}. ${best.name} · ${Math.round(bd/8)} m`;
+    ccWhere.textContent = best.biome.name + ' · ' + (best.floatY ? `floats ~${Math.round(best.floatY/8)} m deep` : 'on the seafloor');
   }
 
   /* ----------------------------------------------------------- abilities */
 
   let dashT = 0, dashCd = 0, shieldT = 0, shieldCd = 0, formCd = 0, invuln = 0, enterCd = 0;
   let lightR = 330;
+  const TM = {}, CD = {};                                     // active time left / cooldown left for the 15 timed abilities
+  TIMED.forEach(id => { TM[id] = 0; CD[id] = 0; });
+  const KEYMAP = {};
+  for(const id of Object.keys(ABILITIES)){
+    const k = ABILITIES[id].key;
+    if(k !== 'Space') KEYMAP[k.length === 1 ? k.toUpperCase() : k] = id;
+  }
+  const nextCave = ()=> DUNGEONS.find(d => !save.cleared.includes(d.id)) || null;
 
   function activate(id){
     if(!isStarted() || !has(id)) return;
+    if(TIMED.includes(id)){ useTimed(id); return; }
     if(id === 'shapeshift'){
       if(formCd > 0) return;
       formCd = 25;
@@ -221,21 +317,135 @@ global.MoceanDungeons = function(ctx){
     }
   }
 
+  /* ---- the 15 cooldown abilities ---- */
+
+  function useTimed(id){
+    const ab = ABILITIES[id];
+    if(ab.caveOnly && !(active && M)){ popText(ab.name + ' only works inside caves', 'warn'); return; }
+    if(CD[id] > 0) return;
+    if(!EFFECTS[id]()) return;                    // an effect may refuse (full health, no target) without spending its cooldown
+    CD[id] = ab.cd; TM[id] = ab.dur || 0;
+    burstBubbles(player.x, player.y, 12);
+    if(!(id === 'sonar' && !active)) popText(ab.name + '!', 'flip');       // open-water sonar prints its own message
+    playBlip();
+  }
+
+  function damageBoss(n){
+    const b = M.boss;
+    if(!b.active || b.dead) return;
+    b.hp -= n; b.hit = 6;
+    if(b.hp <= 0) killBoss();
+  }
+  function hurtGuard(k, n){
+    const e = M.guards[k];
+    e.hp -= n;
+    if(e.hp > 0) return false;
+    M.guards.splice(k, 1); burstBubbles(e.x, e.y, 8); addXP(2 + M.d.id);
+    return true;
+  }
+  function openAhead(dist){                       // the farthest open point in front of the player, up to dist
+    const a = player.displayAngle;
+    for(let d = dist; d > 0; d -= 30){
+      const x = player.x + Math.cos(a)*d, y = player.y + Math.sin(a)*d;
+      if(!isWall(Math.floor(x/T), Math.floor(y/T))) return { x, y };
+    }
+    return { x:player.x, y:player.y };
+  }
+  const ringFx = (x, y, r1, col, life)=> M.fx.push({ type:'ring', x, y, r1, col, life:life || 30, max:life || 30 });
+
+  const EFFECTS = {
+    rapid:  ()=> true,
+    triple: ()=> true,
+    pierce: ()=> true,
+    camo:   ()=> true,
+    magnet: ()=> true,
+    ripple: ()=> { ringFx(player.x, player.y, 460, 0x9be8ff); return true; },
+    heal:   ()=> {
+      if(M.php >= MAX_HP){ popText('Already at full health', 'warn'); return false; }
+      M.php = Math.min(MAX_HP, M.php + 2); caveHud._key = null;
+      ringFx(player.x, player.y, 200, 0x7dff9e);
+      return true;
+    },
+    ink:    ()=> { M.ink = { x:player.x, y:player.y, r:230, life:360 }; return true; },
+    whirl:  ()=> { const p = openAhead(240); M.vortex = { x:p.x, y:p.y, life:240, tick:0 }; return true; },
+    chain:  ()=> {
+      const near = M.guards.map(e => ({ e, d:Math.hypot(e.x - player.x, e.y - player.y) }))
+                           .filter(o => o.d < 560).sort((a, b) => a.d - b.d).slice(0, 4);
+      const b = M.boss;
+      if(b.active && !b.dead && Math.hypot(b.x - player.x, b.y - player.y) < 720) near.push({ boss:true, e:b });
+      if(!near.length){ popText('Nothing in range', 'warn'); return false; }
+      let px = player.x, py = player.y;
+      for(const o of near){
+        M.fx.push({ type:'bolt', x0:px, y0:py, x1:o.e.x, y1:o.e.y, life:16, max:16 });
+        px = o.e.x; py = o.e.y;
+      }
+      for(const o of near){
+        if(o.boss) damageBoss(2);
+        else { const k = M.guards.indexOf(o.e); if(k >= 0) hurtGuard(k, 2); }
+      }
+      return true;
+    },
+    sonar:  ()=> {
+      if(active && M){
+        for(const row of M.seen) row.fill(true);
+        M.sonarT = 420; ringFx(player.x, player.y, 600, 0x9be8ff, 40);
+      } else {
+        const n = nextCave();
+        if(!n) popText('Sonar: every cave is cleared!', 'flip');
+        else {
+          const dx = n.x - player.x;
+          popText(`Sonar: ${n.name} is ${Math.round(Math.abs(dx)/8)} m ${dx > 0 ? 'east' : 'west'}`, 'flip');
+        }
+      }
+      return true;
+    },
+    riptide: ()=> {
+      ringFx(player.x, player.y, 360, 0xcff6ff, 24);
+      for(let k = M.guards.length - 1; k >= 0; k--){
+        const e = M.guards[k];
+        if(Math.hypot(e.x - player.x, e.y - player.y) > 360) continue;
+        const a = Math.atan2(e.y - player.y, e.x - player.x);
+        if(!hurtGuard(k, 2)){ e.vx += Math.cos(a)*7; e.vy += Math.sin(a)*7; }
+      }
+      const b = M.boss;
+      if(b.active && !b.dead && Math.hypot(b.x - player.x, b.y - player.y) < 360 + b.r) damageBoss(2);
+      for(let i = M.shots.length - 1; i >= 0; i--) if(Math.hypot(M.shots[i].x - player.x, M.shots[i].y - player.y) < 360) M.shots.splice(i, 1);
+      return true;
+    },
+    ghost:  ()=> {
+      if(M.sealed){ popText('The boss has sealed the walls', 'warn'); return false; }
+      return true;
+    },
+    cannon: ()=> {
+      const a = player.displayAngle;
+      M.bubs.push({ x:player.x + Math.cos(a)*26, y:player.y + Math.sin(a)*26, vx:Math.cos(a)*11, vy:Math.sin(a)*11,
+                    life:100, r:24, dmg:6, pierce:true, hits:[], big:true });
+      return true;
+    },
+    tsunami: ()=> {
+      M.fx.push({ type:'wave', x:player.x, y:player.y, r1:1100, life:50, max:50 });
+      M.shots.length = 0;
+      for(let k = M.guards.length - 1; k >= 0; k--) hurtGuard(k, 4);
+      damageBoss(Math.max(4, Math.ceil(M.boss.max*0.1)));
+      return true;
+    }
+  };
+
   function handleKey(e){
     if(!isStarted()) return false;
     if(e.key === 'Escape' && active){ exitDungeon(false); return true; }
-    if(e.repeat) return false;
-    let id = null;
-    if(e.key === 'f' || e.key === 'F') id = 'shapeshift';
-    else if(e.key === 'Shift') id = 'dash';
-    else if(e.key === 'g' || e.key === 'G') id = 'glow';
-    else if(e.key === 'b' || e.key === 'B') id = 'shield';
-    if(!id || !has(id)) return false;
+    if(e.repeat || e.ctrlKey || e.metaKey || e.altKey) return false;
+    const id = KEYMAP[e.key.length === 1 ? e.key.toUpperCase() : e.key];
+    if(!id || id === 'wings' || !has(id)) return false;
     activate(id);
     return true;
   }
 
   const look = ()=> FORMS[save.form] || FORMS.fish;
+
+  // [time left, full cooldown] and "is it running right now" for every chip
+  const cdOf = (id)=> id === 'dash' ? [dashCd, 110] : id === 'shield' ? [shieldCd, 720] : TIMED.includes(id) ? [CD[id], ABILITIES[id].cd] : [0, 1];
+  const onOf = (id)=> id === 'glow' ? save.glow : id === 'shield' ? shieldT > 0 : id === 'dash' ? dashT > 0 : TIMED.includes(id) ? TM[id] > 0 : false;
 
   function refreshBar(){
     const list = unlockedList();
@@ -245,14 +455,18 @@ global.MoceanDungeons = function(ctx){
       const el = chips[id], ab = ABILITIES[id];
       if(!has(id)){ el.style.display = 'none'; continue; }
       el.style.display = '';
-      let extra = '', cls = 'ability-chip';
-      if(id === 'shapeshift') extra = ' · ' + look().name;
-      if(id === 'glow' && save.glow) cls += ' on';
-      if(id === 'shield' && shieldT > 0) cls += ' on';
-      if((id === 'dash' && dashCd > 0) || (id === 'shield' && shieldCd > 0 && shieldT <= 0)) cls += ' cd';
+      const [left, full] = cdOf(id);
+      const waiting = left > 0 && !(id === 'shield' && shieldT > 0);
+      let cls = 'ability-chip';
+      if(onOf(id)) cls += ' on';
+      else if(waiting) cls += ' cd';
       if(el.className !== cls) el.className = cls;
-      const txt = `[${ab.key}] ${ab.name}${extra}`;
-      if(el.textContent !== txt) el.textContent = txt;
+      const pct = waiting ? Math.round(100*(1 - left/full)) : 100;
+      if(el._pct !== pct){ el._pct = pct; el.style.setProperty('--cd', pct + '%'); }
+      let txt = `[${ab.key}] ${ab.name}`;
+      if(id === 'shapeshift') txt += ' · ' + look().name;
+      if(waiting && full > 60) txt += ' · ' + Math.ceil(left/60) + 's';
+      if(el.textContent !== txt){ el.textContent = txt; el.title = ab.desc; }
     }
   }
 
@@ -261,6 +475,8 @@ global.MoceanDungeons = function(ctx){
     auraG.x = app.screen.width/2 + view.ox;
     auraG.y = app.screen.height/2 + player.bob + view.oy;
     const s = player.size * look().size;
+    const fade = (TM.camo > 0 || TM.ghost > 0) ? 0.4 : 1;           // camouflage / ghost current make you see-through
+    if(ctx.playerG.alpha !== fade) ctx.playerG.alpha = fade;
     if(save.glow && has('glow')){
       const p = 0.5 + 0.5*Math.sin(now*0.004);
       for(let i=4;i>=1;i--){
@@ -276,8 +492,21 @@ global.MoceanDungeons = function(ctx){
       auraG.drawCircle(0, 0, s*2.1);
       auraG.endFill();
     }
+    auraG.lineStyle(0);
+    if(TM.ripple > 0){
+      auraG.lineStyle(2, 0x9be8ff, 0.35);
+      auraG.drawCircle(0, 0, s*(2.6 + 0.4*Math.sin(now*0.01)));
+    }
+    if(TM.magnet > 0){
+      auraG.lineStyle(1.5, 0xffe28a, 0.4);
+      auraG.drawCircle(0, 0, s*(3.2 - 0.6*((now*0.004) % 1)));
+    }
+    if(TM.rapid > 0 || TM.triple > 0 || TM.pierce > 0){
+      auraG.lineStyle(2, TM.pierce > 0 ? 0xffd36a : 0xcff6ff, 0.5);
+      auraG.drawCircle(Math.cos(player.displayAngle)*s*1.5, Math.sin(player.displayAngle)*s*1.5, s*0.35);
+    }
+    auraG.lineStyle(0);
     if(dashT > 0){
-      auraG.lineStyle(0);
       auraG.beginFill(0xffffff, 0.18);
       auraG.drawCircle(-Math.cos(player.displayAngle)*s, -Math.sin(player.displayAngle)*s, s*0.9);
       auraG.endFill();
@@ -298,7 +527,7 @@ global.MoceanDungeons = function(ctx){
       lab.visible = true;
       const by = baseY(d), done = save.cleared.includes(d.id);
       caveG.lineStyle(2, 0x1c1c22, 0.7);
-      caveG.beginFill(fl ? 0x4a4458 : 0x4b4b55);
+      caveG.beginFill(d.rock);
       const N = 20;
       if(!fl){
         caveG.moveTo(d.x - 190, by + 20);
@@ -331,7 +560,9 @@ global.MoceanDungeons = function(ctx){
       const pulse = 0.55 + 0.35*Math.sin(now*0.003 + d.id);
       caveG.lineStyle(4, done ? 0xffe28a : d.accent, pulse);
       caveG.drawEllipse(d.x, my, 66, 60);
-      lab.text = (done ? '★ ' : '') + d.id + '. ' + d.name;
+      if(d.legend){ caveG.lineStyle(2, 0xffd36a, 0.35 + 0.3*Math.sin(now*0.004 + d.id)); caveG.drawEllipse(d.x, my, 78, 72); }   // legends get a golden second ring
+      lab.text = (done ? '★ ' : '') + (d.legend ? '✦ ' : '') + d.id + '. ' + d.name;
+      lab.style.fill = d.legend ? 0xffd36a : 0xdff6ff;
       lab.x = d.x; lab.y = my - (fl ? 138 : 175);
     });
   }
@@ -349,7 +580,7 @@ global.MoceanDungeons = function(ctx){
   let active = false;
   let M = null;
 
-  function genMaze(mw, mh){
+  function genMaze(mw, mh, big){
     const W0 = mw*2+1, H0 = mh*2+1;
     const g0 = Array.from({length:H0}, ()=> new Array(W0).fill(1));
     const open = Array.from({length:mh}, ()=> Array.from({length:mw}, ()=> []));
@@ -376,10 +607,10 @@ global.MoceanDungeons = function(ctx){
     // the boss arena hangs off the right edge, behind the farthest cell of the last column
     let best = [mw-1, 0];
     for(let y=0;y<mh;y++) if(dist[y][mw-1] > dist[best[1]][best[0]]) best = [mw-1, y];
-    const AW = 9, AH = 7, W = W0 + AW + 1, H = Math.max(H0, AH + 2);
+    const AW = big ? 12 : 9, AH = big ? 9 : 7, W = W0 + AW + 1, H = Math.max(H0, AH + 2);   // legends get a bigger arena
     const g = Array.from({length:H}, ()=> new Array(W).fill(1));
     for(let y=0;y<H0;y++) for(let x=0;x<W0;x++) g[y][x] = g0[y][x];
-    const doorY = best[1]*2+1, top = clamp(doorY - 3, 1, H - AH - 1);
+    const doorY = best[1]*2+1, top = clamp(doorY - (AH >> 1), 1, H - AH - 1);
     for(let y=top; y<top+AH; y++) for(let x=W0; x<W0+AW; x++) g[y][x] = 0;
     g[doorY][W0-1] = 0;
     return { W, H, g, open, dist, orbCell:best, door:{ x:W0-1, y:doorY }, arena:{ x0:W0, y0:top, w:AW, h:AH } };
@@ -411,7 +642,7 @@ global.MoceanDungeons = function(ctx){
   function setDoor(closed){ M.m.g[M.m.door.y][M.m.door.x] = closed ? 1 : 0; buildMazeGraphics(M.d, M.m); }
 
   function enterDungeon(d){
-    const m = genMaze(d.mw, d.mh);
+    const m = genMaze(d.mw, d.mh, d.legend);
     buildMazeGraphics(d, m);
 
     const pearls = [], cells = [];
@@ -429,19 +660,19 @@ global.MoceanDungeons = function(ctx){
     for(let i=0;i<d.guards;i++){
       const [cx,cy] = far[randi(0, far.length-1)];
       const p = cellPos(cx,cy);
-      guards.push({ kind:d.enemies[randi(0, d.enemies.length-1)], hp:2, dir:0,
+      guards.push({ kind:d.enemies[randi(0, d.enemies.length-1)], hp:2 + Math.floor(d.id/7), dir:0,
                     cx, cy, x:p.x, y:p.y, tx:p.x, ty:p.y, ncx:cx, ncy:cy,
-                    speed: 1.0 + d.id*0.12 + rand(0,0.25), r:22, ph:rand(0,6), vx:0, vy:0 });
+                    speed: 0.9 + d.id*0.07 + rand(0,0.25), r:22, ph:rand(0,6), vx:0, vy:0 });
     }
     const A = m.arena, ac = { x:(A.x0 + A.w/2)*T, y:(A.y0 + A.h/2)*T };
-    const hp = 12 + 4*d.id;
+    const hp = Math.round((12 + 3*d.id) * (d.legend ? 1.4 : 1));
     const boss = Object.assign({ hp, max:hp, x:ac.x + 200, y:ac.y, vx:0, vy:0, ang:Math.PI, state:'idle',
                                  t:0, hit:0, active:false, dead:false, atk:'charge', tx:ac.x, ty:ac.y }, d.boss);
     const start = cellPos(0,0);
     const seen = Array.from({length:m.H}, ()=> new Array(m.W).fill(false));
 
     M = { d, m, pearls, guards, start, orb:ac, ac, orbOn:false, seen, armed:false, done:false, frame:0,
-          boss, shots:[], bubs:[], php:MAX_HP, fireCd:0, sealed:false };
+          boss, shots:[], bubs:[], php:MAX_HP, fireCd:0, sealed:false, fx:[], vortex:null, ink:null, sonarT:0 };
     const cell = Math.max(4, Math.floor(Math.min(230/m.W, 170/m.H)));
     mapEl.width = m.W*cell; mapEl.height = m.H*cell; M.cell = cell;
 
@@ -453,7 +684,7 @@ global.MoceanDungeons = function(ctx){
     hideWhenInside(true);
     waterBgEl.style.display = 'none';
     dungeonC.visible = true; darkS.visible = true; mapEl.style.display = 'block';
-    showBanner('Entering', d.name, 'Space shoots bubbles. Beat the boss at the far end, then take the relic.');
+    showBanner('Entering', d.name, d.biome.name + ' · ' + (d.legend ? 'A Mythical Sea Legend waits at the far end.' : 'Space shoots bubbles. Beat the boss, then take the relic.'));
     playBlip();
   }
 
@@ -508,7 +739,8 @@ global.MoceanDungeons = function(ctx){
     const steps = Math.max(1, Math.ceil(raw*dt/18));
     for(let i=0;i<steps;i++){
       player.x += player.vx*dt/steps; player.y += player.vy*dt/steps;
-      collide(r);
+      if(TM.ghost <= 0) collide(r);
+      else { player.x = clamp(player.x, r, M.m.W*T - r); player.y = clamp(player.y, r, M.m.H*T - r); }   // Ghost Current: walls ignored
     }
 
     const speed = Math.hypot(player.vx, player.vy);
@@ -522,7 +754,21 @@ global.MoceanDungeons = function(ctx){
     return speed;
   }
 
+  // when Ghost Current ends inside solid rock, slide to the nearest open tile
+  function unstick(){
+    if(!isWall(Math.floor(player.x/T), Math.floor(player.y/T))) return;
+    const tx = Math.floor(player.x/T), ty = Math.floor(player.y/T);
+    let best = null, bd = Infinity;
+    for(let dy=-8; dy<=8; dy++) for(let dx=-8; dx<=8; dx++){
+      if(isWall(tx+dx, ty+dy)) continue;
+      const d = dx*dx + dy*dy;
+      if(d < bd){ bd = d; best = [tx+dx, ty+dy]; }
+    }
+    if(best){ player.x = (best[0] + 0.5)*T; player.y = (best[1] + 0.5)*T; player.vx = player.vy = 0; burstBubbles(player.x, player.y, 10); }
+  }
+
   function defeat(){
+    M.fx.length = 0; M.vortex = null; M.ink = null; TM.ghost = 0;
     M.php = MAX_HP; M.shots.length = 0; M.bubs.length = 0; M.armed = false;
     player.x = M.start.x; player.y = M.start.y; player.vx = player.vy = 0;
     invuln = 120;
@@ -544,13 +790,18 @@ global.MoceanDungeons = function(ctx){
 
   function fire(){
     if(!active || !M || M.fireCd > 0) return;
-    M.fireCd = 11;
-    const a = player.displayAngle;
-    M.bubs.push({ x:player.x + Math.cos(a)*20, y:player.y + Math.sin(a)*20,
-                  vx:Math.cos(a)*13 + player.vx*0.3, vy:Math.sin(a)*13 + player.vy*0.3, life:80 });
+    M.fireCd = 11 / (TM.rapid > 0 ? 2.6 : 1);                    // Rapid Bubbles
+    const a = player.displayAngle, pierce = TM.pierce > 0;       // Piercing Bubbles
+    const spread = TM.triple > 0 ? [-0.3, 0, 0.3] : [0];         // Triple Shot
+    for(const o of spread){
+      const aa = a + o;
+      M.bubs.push({ x:player.x + Math.cos(aa)*20, y:player.y + Math.sin(aa)*20,
+                    vx:Math.cos(aa)*13 + player.vx*0.3, vy:Math.sin(aa)*13 + player.vy*0.3, life:80,
+                    dmg:pierce ? 2 : 1, pierce, hits:[] });
+    }
   }
 
-  function stepGuard(e, dt){
+  function stepGuard(e, dt, blind){
     const dx = e.tx - e.x, dy = e.ty - e.y, d = Math.hypot(dx, dy);
     if(d >= 16){
       const ease = 1 - Math.pow(0.9, dt);                 // steer, don't snap: corners become gentle curves
@@ -564,7 +815,7 @@ global.MoceanDungeons = function(ctx){
     const fwd = opts.filter(([x,y])=> !(x === from[0] && y === from[1]));
     if(fwd.length) opts = fwd;
     let pick;
-    if(Math.hypot(player.x - e.x, player.y - e.y) < 330 && Math.random() < 0.8){
+    if(!blind && Math.hypot(player.x - e.x, player.y - e.y) < 330 && Math.random() < 0.8){
       pick = opts.reduce((best, c)=>{
         const p = cellPos(c[0], c[1]);
         const dd = Math.hypot(p.x - player.x, p.y - player.y);
@@ -593,8 +844,15 @@ global.MoceanDungeons = function(ctx){
     setTimeout(()=>{ if(active && M && M.d === d) exitDungeon(); }, 3200);
   }
 
-  const BOSS_ATK = { crab:['charge','ring'], eel:['charge','fan'], angler:['fan','charge'],
-                     kraken:['fan','ring'], shark:['charge','fan','fan','ring'] };
+  const BOSS_ATK = {
+    crab:['charge','ring'], eel:['charge','fan'], angler:['fan','charge'], shark:['charge','fan','fan','ring'],
+    puffer:['ring','charge','ring'], jelly:['ring','fan','spiral'], ray:['charge','fan','charge'],
+    kraken:['fan','ring','spiral'],
+    siren:['spiral','fan','ring'], ghostship:['charge','fan','spiral','ring'], dragon:['fan','charge','spiral','ring'],
+    turtle:['ring','charge','spiral'], serpent:['charge','fan','spiral','charge'],
+    hydra:['fan','fan','spiral','ring'], charybdis:['spiral','ring','spiral','fan'],
+    leviathan:['charge','spiral','fan','ring','spiral']
+  };
 
   function shoot(x, y, a, sp){ M.shots.push({ x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, life:240 }); }
 
@@ -605,13 +863,13 @@ global.MoceanDungeons = function(ctx){
     if(!b.active){
       if(player.x > (A.x0 + 1)*T){
         b.active = true; M.sealed = true; setDoor(true); b.state = 'rest'; b.t = 70;
-        showBanner('Boss', b.name, 'Shoot it with Space!');
+        showBanner(b.legend ? 'Mythical Sea Legend' : 'Boss', b.name, 'Shoot it with Space!');
       }
       return;
     }
-    const rage = b.hp < b.max*0.5 ? 1.15 : 1;
+    const rage = b.legend ? 1 + (1 - b.hp/b.max)*0.5 : (b.hp < b.max*0.5 ? 1.15 : 1);   // legends get angrier as they bleed
     const x0 = A.x0*T + b.r, x1 = (A.x0 + A.w)*T - b.r, y0 = A.y0*T + b.r, y1 = (A.y0 + A.h)*T - b.r;
-    const toP = Math.atan2(player.y - b.y, player.x - b.x);
+    const toP = TM.camo > 0 ? b.ang : Math.atan2(player.y - b.y, player.x - b.x);   // Camouflage: it can't find you
     b.t -= dt;
     if(b.state === 'rest'){
       if(Math.hypot(b.tx - b.x, b.ty - b.y) < 24){ b.tx = rand(x0, x1); b.ty = rand(y0, y1); }
@@ -627,8 +885,10 @@ global.MoceanDungeons = function(ctx){
         if(b.atk === 'charge'){
           b.state = 'charge'; b.t = 34;
           b.vx = Math.cos(toP)*6.5*rage; b.vy = Math.sin(toP)*6.5*rage; b.ang = toP;
+        } else if(b.atk === 'spiral'){
+          b.state = 'spiral'; b.t = 110; b.cd = 0; b.spA = b.ang;
         } else {
-          if(b.atk === 'ring'){ const n = 8; for(let i=0;i<n;i++) shoot(b.x, b.y, i/n*Math.PI*2 + b.ang, 2.4*rage); }
+          if(b.atk === 'ring'){ const n = b.legend ? 12 : 8; for(let i=0;i<n;i++) shoot(b.x, b.y, i/n*Math.PI*2 + b.ang, 2.4*rage); }
           else { const n = rage > 1 ? 5 : 3; for(let i=0;i<n;i++) shoot(b.x, b.y, toP + (i - (n-1)/2)*0.3, 3.4*rage); }
           b.state = 'rest'; b.t = rand(110, 170)/rage;
         }
@@ -638,6 +898,11 @@ global.MoceanDungeons = function(ctx){
       const cx = clamp(b.x, x0, x1), cy = clamp(b.y, y0, y1);
       if(cx !== b.x || cy !== b.y){ b.x = cx; b.y = cy; b.t = 0; burstBubbles(b.x, b.y, 6); }
       if(b.t <= 0){ b.state = 'rest'; b.t = 100/rage; }
+    } else if(b.state === 'spiral'){
+      b.vx *= Math.pow(0.9, dt); b.vy *= Math.pow(0.9, dt); b.x += b.vx*dt; b.y += b.vy*dt;
+      b.spA += 0.16*dt*rage; b.ang = b.spA; b.cd -= dt;
+      if(b.cd <= 0){ b.cd = 6/rage; for(let k=0;k<3;k++) shoot(b.x, b.y, b.spA + k*Math.PI*2/3, 2.6*rage); }
+      if(b.t <= 0){ b.state = 'rest'; b.t = 100/rage; }
     }
   }
 
@@ -646,8 +911,8 @@ global.MoceanDungeons = function(ctx){
     b.dead = true; M.orbOn = true; M.shots.length = 0;
     if(M.sealed){ M.sealed = false; setDoor(false); }
     for(let i=0;i<4;i++) burstBubbles(b.x + rand(-40,40), b.y + rand(-40,40), 12);
-    addXP(60*d.id, 'Boss defeated!');
-    showBanner('Boss defeated', b.name, 'Take the glowing relic!');
+    addXP((d.legend ? 100 : 60)*d.id, d.legend ? 'Sea Legend slain!' : 'Boss defeated!');
+    showBanner(d.legend ? 'Sea Legend defeated' : 'Boss defeated', b.name, 'Take the glowing relic!');
   }
 
   function updateDungeon(dt, now){
@@ -660,51 +925,80 @@ global.MoceanDungeons = function(ctx){
     }
     const safe = ()=> shieldT > 0 || invuln > 0 || M.done;
 
+    const eDt = dt * (TM.ripple > 0 ? 0.4 : 1);                 // Time Ripple slows everything hostile
+    const b = M.boss;
+
     // bubbles: hold Space to keep firing
     if(M.fireCd > 0) M.fireCd -= dt;
     if(keys.space) fire();
-    const b = M.boss;
     for(let i=M.bubs.length-1;i>=0;i--){
       const p = M.bubs[i]; if(!p) continue;
       p.x += p.vx*dt; p.y += p.vy*dt; p.life -= dt;
+      const rad = p.r || 7;
       let dead = p.life <= 0 || isWall(Math.floor(p.x/T), Math.floor(p.y/T));
-      if(!dead && b.active && !b.dead && Math.hypot(p.x - b.x, p.y - b.y) < b.r + 12){
-        dead = true; b.hp--; b.hit = 6;
-        if(b.hp <= 0) killBoss();
+      if(!dead && b.active && !b.dead && Math.hypot(p.x - b.x, p.y - b.y) < b.r + rad + 5){
+        if(!p.pierce){ dead = true; damageBoss(p.dmg || 1); }
+        else if(!p.hitBoss){ p.hitBoss = true; damageBoss(p.dmg || 1); }
       }
       if(!dead) for(let k=M.guards.length-1;k>=0;k--){
         const e = M.guards[k];
-        if(Math.hypot(p.x - e.x, p.y - e.y) < e.r + 8){
-          dead = true; e.hp--;
-          if(e.hp <= 0){ M.guards.splice(k,1); burstBubbles(e.x, e.y, 8); addXP(2 + M.d.id); }
-          break;
+        if(Math.hypot(p.x - e.x, p.y - e.y) < e.r + rad + 1){
+          if(p.pierce){ if(p.hits.includes(e)) continue; p.hits.push(e); hurtGuard(k, p.dmg || 1); }
+          else { dead = true; hurtGuard(k, p.dmg || 1); break; }
         }
       }
       if(dead) M.bubs.splice(i,1);
     }
 
-    // sea-creature guardians
+    // sea-creature guardians (Ink Cloud blinds + slows them, Whirlpool drags them in)
+    const V = M.vortex, I = M.ink;
     for(const e of M.guards){
-      stepGuard(e, dt);
+      let gdt = eDt, blind = TM.camo > 0;
+      if(I && Math.hypot(e.x - I.x, e.y - I.y) < I.r){ gdt *= 0.35; blind = true; }
+      if(V){
+        const vx = V.x - e.x, vy = V.y - e.y, vd = Math.hypot(vx, vy);
+        if(vd < 380 && vd > 8){ const pull = (1.1 + (380 - vd)/380*2.2)*dt; e.x += vx/vd*pull; e.y += vy/vd*pull; }
+      }
+      stepGuard(e, gdt, blind);
       if(!safe() && Math.hypot(player.x - e.x, player.y - e.y) < e.r + pr*0.8){ damagePlayer(e.x, e.y); break; }
     }
+    if(V){
+      V.life -= dt; V.tick -= dt;
+      if(V.tick <= 0){
+        V.tick = 28;
+        for(let k=M.guards.length-1;k>=0;k--) if(Math.hypot(M.guards[k].x - V.x, M.guards[k].y - V.y) < 140) hurtGuard(k, 1);
+        if(b.active && !b.dead && Math.hypot(b.x - V.x, b.y - V.y) < b.r + 150) damageBoss(1);
+      }
+      if(V.life <= 0) M.vortex = null;
+    }
+    if(I){ I.life -= dt; if(I.life <= 0) M.ink = null; }
 
     // boss + its shots
-    updateBoss(dt);
+    updateBoss(eDt);
     if(b.active && !b.dead && !safe() && Math.hypot(player.x - b.x, player.y - b.y) < b.r + pr*0.7) damagePlayer(b.x, b.y);
     for(let i=M.shots.length-1;i>=0;i--){
       const p = M.shots[i]; if(!p) continue;
-      p.x += p.vx*dt; p.y += p.vy*dt; p.life -= dt;
+      p.x += p.vx*eDt; p.y += p.vy*eDt; p.life -= eDt;
       let dead = p.life <= 0 || isWall(Math.floor(p.x/T), Math.floor(p.y/T));
+      if(!dead && M.ink && Math.hypot(p.x - M.ink.x, p.y - M.ink.y) < M.ink.r) dead = true;        // the ink eats shots
       if(!dead && !safe() && Math.hypot(p.x - player.x, p.y - player.y) < 11 + pr*0.7){ dead = true; damagePlayer(p.x, p.y); }
       if(dead) M.shots.splice(i,1);
     }
 
+    const mag = TM.magnet > 0;                                    // Pearl Magnet
     for(const p of M.pearls){
-      if(!p.got && Math.hypot(player.x - p.x, player.y - p.y) < 42 + pr){
+      if(p.got) continue;
+      if(mag){
+        const dx = player.x - p.x, dy = player.y - p.y, dd = Math.hypot(dx, dy);
+        if(dd < 520 && dd > 1){ const st = Math.min(dd, 7)*dt; p.x += dx/dd*st; p.y += dy/dd*st; }
+      }
+      if(Math.hypot(player.x - p.x, player.y - p.y) < 42 + pr){
         p.got = true; addXP(5 + 3*M.d.id, 'Pearl'); burstBubbles(p.x, p.y, 6); playBlip();
       }
     }
+
+    for(let i=M.fx.length-1;i>=0;i--){ M.fx[i].life -= dt; if(M.fx[i].life <= 0) M.fx.splice(i,1); }
+    if(M.sonarT > 0) M.sonarT -= dt;
 
     if(M.orbOn && !M.done && Math.hypot(player.x - M.orb.x, player.y - M.orb.y) < 46 + pr) completeDungeon();
     const pd = Math.hypot(player.x - M.start.x, player.y - M.start.y);
@@ -728,7 +1022,7 @@ global.MoceanDungeons = function(ctx){
     caveHud._key = key;
     caveHud.style.display = 'block';
     caveHud.innerHTML = '<div class="hearts">' + '♥'.repeat(Math.max(0, M.php)) + '<span>' + '♥'.repeat(MAX_HP - Math.max(0, M.php)) + '</span></div>' +
-      (showBoss ? `<div class="boss-name">${b.name}</div><div class="boss-bar"><div style="width:${Math.max(0, b.hp/b.max*100)}%"></div></div>` : '');
+      (showBoss ? `<div class="boss-name${b.legend ? ' legend' : ''}">${b.legend ? '✦ ' : ''}${b.name}</div><div class="boss-bar${b.legend ? ' legend' : ''}"><div style="width:${Math.max(0, b.hp/b.max*100)}%"></div></div>` : '');
   }
 
   /* ---------------- sea-creature drawing (all vector, drawn each frame) ---------------- */
@@ -737,12 +1031,17 @@ global.MoceanDungeons = function(ctx){
 
   const PAL = {
     crab:[0xff8a5c,0xffd0a8], urchin:[0xb07aff,0xff9bd2], eel:[0x6fe0a0,0xd5ff9b], puffer:[0xffd45e,0xfff0bd],
-    jelly:[0xd59bff,0xffc8ff], angler:[0x8fa8d8,0x88ff44], kraken:[0xd07ad8,0xffc8ff]
+    jelly:[0xd59bff,0xffc8ff], angler:[0x8fa8d8,0x88ff44], kraken:[0xd07ad8,0xffc8ff],
+    ray:[0x6fa8ff,0xdff6ff], siren:[0x6fe0d0,0xffc8ff], ghostship:[0x8fe8d8,0xe0fff8], dragon:[0xff5a4a,0xffd36a],
+    turtle:[0x6fbf8a,0xe8e0a8], serpent:[0x6fd0a0,0xd5ff9b], leviathan:[0x7a7aff,0xffd36a], hydra:[0x5fd08a,0xff9bd2],
+    charybdis:[0x5a6aff,0xcfd8ff]
   };
+  const BOSS_SCALE = { crab:0.8, eel:1.05, angler:0.95, kraken:0.95, puffer:0.8, jelly:0.9, ray:0.7, siren:0.8, ghostship:0.6,
+                       dragon:0.72, turtle:0.8, serpent:0.85, leviathan:0.85, hydra:0.8, charybdis:0.9 };
 
   // One definition per species, in unit coordinates (+u = forward). S scales it: ~20 for guardians, ~55 for bosses.
-  function drawCreature(g, kind, x, y, ang, S, t, flash){
-    const c = Math.cos(ang), sn = Math.sin(ang), pal = PAL[kind];
+  function drawCreature(g, kind, x, y, ang, S, t, flash, palOv){
+    const c = Math.cos(ang), sn = Math.sin(ang), pal = palOv || PAL[kind];
     const body = flash ? 0xffffff : pal[0], acc = flash ? 0xffffff : pal[1];
     const P = (u, v)=> [x + (u*c - v*sn)*S, y + (u*sn + v*c)*S];
     const W = Math.max(1.7, S*0.085);
@@ -852,6 +1151,180 @@ global.MoceanDungeons = function(ctx){
         for(const sd of [-1,1]){ eye(0.5, sd*0.42, Math.max(2.5, S*0.2)); }
         break;
       }
+
+      case 'ray': {
+        const fl = Math.sin(t*2.4)*0.28;
+        line(W, body);
+        g.moveTo(...P(1.25, 0));
+        quad(P(0.5, -0.9 - fl*0.4), P(-0.3, -1.9 - fl));
+        quad(P(-0.7, -0.7), P(-1.0, 0));
+        quad(P(-0.7, 0.7), P(-0.3, 1.9 + fl));
+        quad(P(0.5, 0.9 + fl*0.4), P(1.25, 0));
+        line(W*0.6, acc, 0.7);
+        g.moveTo(...P(0.9, 0)); quad(P(0.1, -0.5 - fl*0.3), P(-0.5, -1.15 - fl*0.6));
+        g.moveTo(...P(0.9, 0)); quad(P(0.1, 0.5 + fl*0.3), P(-0.5, 1.15 + fl*0.6));
+        line(W*0.8, body);
+        path([P(-1.0, 0), P(-1.8, Math.sin(t*3)*0.2), P(-2.6, Math.sin(t*3 + 1)*0.35)]);
+        line(W*0.7, acc); path([P(1.2, -0.12), P(1.55, -0.3)]); path([P(1.2, 0.12), P(1.55, 0.3)]);
+        eye(0.75, -0.25, Math.max(1.8, S*0.07)); eye(0.75, 0.25, Math.max(1.8, S*0.07));
+        break;
+      }
+      case 'siren': {
+        const N = 9, top = [], bot = [];
+        for(let i=0;i<=N;i++){
+          const f = i/N, u = -0.35 - i*0.2, v = Math.sin(t*2.2 - i*0.55)*0.28*(0.25 + f), w = 0.3*(1 - f*0.9) + 0.03;
+          top.push(P(u, v - w)); bot.push(P(u, v + w));
+        }
+        line(W, body); path(top); path(bot);
+        const eu = -0.35 - N*0.2, ev = Math.sin(t*2.2 - N*0.55)*0.28*1.25;
+        line(W*0.9, acc); path([P(eu, ev), P(eu - 0.45, ev - 0.5), P(eu - 0.2, ev), P(eu - 0.45, ev + 0.5), P(eu, ev)]);
+        line(W*0.5, acc, 0.5); for(let i=1;i<N;i+=2) path([top[i], bot[i]]);
+        line(W, body); loop([P(0.6,-0.3), P(0.0,-0.42), P(-0.35,-0.2), P(-0.35,0.2), P(0.0,0.42), P(0.6,0.3)]);
+        oval(0.95, 0, 0.27, 0.27, 14);
+        const arm = Math.sin(t*2)*0.12;
+        line(W*0.8, body);
+        path([P(0.35,-0.36), P(0.75,-0.85 + arm), P(1.25,-0.75 + arm)]);
+        path([P(0.35, 0.36), P(0.75, 0.85 - arm), P(1.25, 0.75 - arm)]);
+        line(W*0.6, acc, 0.85);                                           // flowing hair
+        for(let k=0;k<5;k++){
+          const v0 = (-0.2 + k*0.1)*1.3;
+          g.moveTo(...P(0.9, v0));
+          for(let j=1;j<=4;j++) g.lineTo(...P(0.9 - j*0.35, v0 + (k - 2)*0.1*j + Math.sin(t*2.6 + j + k)*0.12*j));
+        }
+        const ph = (t*0.5) % 1, hp = P(0.95, 0);                          // her song, as ripples
+        g.lineStyle({ width:Math.max(1.2, W*0.5), color:acc, alpha:0.5*(1 - ph), ...ROUND });
+        g.drawCircle(hp[0], hp[1], S*(0.4 + ph*1.4));
+        eye(1.02, -0.09, Math.max(1.4, S*0.045));
+        break;
+      }
+      case 'ghostship': {
+        const dir = Math.cos(ang) >= 0 ? 1 : -1;                          // side view; only flips left/right
+        const bob = Math.sin(t*1.3)*S*0.06;
+        const Q = (u, v)=> [x + u*dir*S, y + v*S + bob];
+        const ql = (u, v)=> g.lineTo(...Q(u, v)), qm = (u, v)=> g.moveTo(...Q(u, v));
+        line(W, body, 0.85);
+        qm(1.7,-0.15); ql(1.2,0.5); ql(-1.3,0.5); ql(-1.7,-0.25); ql(-1.3,-0.1); ql(1.0,-0.1); ql(1.7,-0.15);
+        line(W*0.8, body, 0.85);
+        qm(0.55,-0.1); ql(0.55,-1.9); qm(-0.7,-0.1); ql(-0.7,-1.65);
+        const sw = Math.sin(t*2)*0.12, sw2 = Math.sin(t*2 + 1.3)*0.1;
+        line(W*0.7, acc, 0.75);
+        qm(0.55,-1.75); ql(1.25 + sw,-1.45); ql(1.15 + sw2,-0.95); ql(1.3 + sw,-0.45); ql(0.55,-0.3);     // tattered sails
+        qm(-0.7,-1.55); ql(-1.3 + sw2,-1.25); ql(-1.2 + sw,-0.8); ql(-1.35 + sw2,-0.35); ql(-0.7,-0.25);
+        qm(0.55,-1.9); ql(1.0 + sw,-1.8); ql(0.55,-1.7);                                                  // flag
+        line(W*0.5, acc, 0.35);                                                                           // ghostly wake
+        for(let k=0;k<3;k++){ qm(-1.7, -0.1 + k*0.2); for(let j=1;j<=4;j++) ql(-1.7 - j*0.35, -0.1 + k*0.2 + Math.sin(t*3 + j + k)*0.1*j); }
+        const lp = Q(-1.45,-0.45);
+        g.lineStyle(0); g.beginFill(acc, 0.85); g.drawCircle(lp[0], lp[1], Math.max(2.2, S*0.07)); g.endFill();
+        g.beginFill(acc, 0.14); g.drawCircle(lp[0], lp[1], S*0.28); g.endFill();
+        break;
+      }
+      case 'dragon': {
+        const N = 15, seg = 0.36, top = [], bot = [], pts = [];
+        for(let i=0;i<=N;i++){
+          const f = i/N, u = 0.35 - i*seg, v = Math.sin(t*2 - i*0.5)*0.34*(0.3 + f), w = 0.3*(1 - f*0.82) + 0.035;
+          top.push(P(u, v - w)); bot.push(P(u, v + w)); pts.push([u, v, w]);
+        }
+        line(W, body); path(top); path(bot);
+        line(W*0.5, acc, 0.45); for(let i=1;i<N;i+=2) path([top[i], bot[i]]);
+        line(W*0.6, acc, 0.9);                                                                        // mane
+        for(let i=0;i<N;i++){ const [u, v, w] = pts[i]; path([P(u + 0.1, v - w), P(u - 0.02, v - w - 0.22 - (i%2)*0.1 + Math.sin(t*4 + i)*0.04), P(u - 0.12, v - w)]); }
+        line(W*0.8, body);                                                                            // clawed legs
+        for(const i of [3, 8]){
+          const [u, v, w] = pts[i];
+          path([P(u, v + w), P(u + 0.05, v + w + 0.28), P(u + 0.22, v + w + 0.38)]);
+          path([P(u, v - w), P(u + 0.05, v - w - 0.28), P(u + 0.22, v - w - 0.38)]);
+        }
+        line(W, body);
+        g.moveTo(...top[0]); g.lineTo(...P(0.9,-0.28)); g.lineTo(...P(1.35,-0.14)); g.lineTo(...P(1.4,0)); g.lineTo(...P(1.1,0.12)); g.lineTo(...P(0.9,0.3)); g.lineTo(...bot[0]);
+        line(W*0.6, acc);
+        const wh = Math.sin(t*2.4)*0.2;                                                               // whiskers
+        for(const sd of [-1,1]){ g.moveTo(...P(1.3, sd*0.05)); quad(P(1.9, sd*0.5 + wh*sd), P(2.5, sd*0.2 + wh)); }
+        path([P(0.55,-0.3), P(0.25,-0.8), P(0.05,-0.74)]); path([P(0.55,0.3), P(0.25,0.8), P(0.05,0.74)]);   // horns
+        eye(0.7, -0.14, Math.max(2, S*0.07));
+        const pp = P(2.3, 0.9 + wh), glow = 0.5 + 0.5*Math.sin(t*3);                                  // the dragon pearl
+        g.lineStyle(0); g.beginFill(0xffffff, 0.95); g.drawCircle(pp[0], pp[1], Math.max(3, S*0.12)); g.endFill();
+        g.beginFill(acc, 0.12 + 0.1*glow); g.drawCircle(pp[0], pp[1], S*0.4); g.endFill();
+        break;
+      }
+      case 'turtle': {
+        const fl = Math.sin(t*1.6)*0.25;
+        line(W, body); oval(0, 0, 1.15, 0.9, 26);
+        line(W*0.6, acc, 0.6); oval(0, 0, 0.72, 0.55, 18);
+        for(let k=0;k<6;k++){ const a = k/6*Math.PI*2 + 0.3; path([P(Math.cos(a)*0.72, Math.sin(a)*0.55), P(Math.cos(a)*1.15, Math.sin(a)*0.9)]); }
+        line(W*0.9, body);
+        g.moveTo(...P(1.1,-0.2)); quad(P(1.5,-0.25), P(1.7,0)); quad(P(1.5,0.25), P(1.1,0.2));
+        eye(1.5, -0.1, Math.max(1.6, S*0.05));
+        for(const sd of [-1,1]){
+          line(W*0.9, body);
+          path([P(0.55, sd*0.8), P(0.9, sd*(1.5 + fl)), P(0.25, sd*(2.0 + fl))]);
+          path([P(-0.7, sd*0.7), P(-0.95, sd*(1.2 - fl*0.5)), P(-0.55, sd*1.4)]);
+        }
+        line(W*0.7, body); path([P(-1.15, 0), P(-1.6, Math.sin(t*2)*0.12)]);
+        line(W*0.7, 0x6fd08a);                                                                        // a little island grows on its back
+        path([P(0.0,0.05), P(-0.45,0.05)]); path([P(-0.45,0.05), P(-0.6,0.3)]); path([P(-0.45,0.05), P(-0.6,-0.2)]); path([P(-0.45,0.05), P(-0.72,0.05)]);
+        break;
+      }
+      case 'serpent':
+      case 'leviathan': {
+        const lev = kind === 'leviathan';
+        const N = lev ? 20 : 18, seg = 0.42, top = [], bot = [], pts = [];
+        for(let i=0;i<=N;i++){
+          const f = i/N, u = 0.2 - i*seg, v = Math.sin(t*1.8 - i*0.45)*0.42*(0.35 + f), w = 0.42*(1 - f*0.88) + 0.04;
+          top.push(P(u, v - w)); bot.push(P(u, v + w)); pts.push([u, v, w]);
+        }
+        line(W, body); path(top); path(bot);
+        line(W*0.45, acc, 0.4); for(let i=1;i<=N;i++) path([top[i], bot[i]]);
+        line(W*0.7, acc, 0.9);
+        for(let i=1;i<N;i++){
+          const [u, v, w] = pts[i], l = (i%2 ? 0.28 : 0.4)*(lev ? 1.3 : 1)*(1 - i/N*0.6);
+          path([P(u + 0.12, v - w), P(u - 0.04, v - w - l), P(u - 0.2, v - w)]);
+        }
+        const open = 0.08 + (Math.sin(t*2.2) + 1)*0.1;
+        line(W, body);
+        g.moveTo(...top[0]); g.lineTo(...P(0.55,-0.42)); g.lineTo(...P(1.2,-0.28)); g.lineTo(...P(1.65,-0.08)); g.lineTo(...P(1.55,0));
+        g.moveTo(...bot[0]); g.lineTo(...P(0.5, 0.42 + open)); g.lineTo(...P(1.1, 0.3 + open)); g.lineTo(...P(1.5, 0.08 + open*1.4));
+        line(W*0.7, acc);
+        for(let k=0;k<4;k++) path([P(1.5 - k*0.2, -0.05 - k*0.01), P(1.46 - k*0.2, 0.1 + open*0.4)]);
+        path([P(1.5, 0.08 + open*1.4), P(1.7, 0.12 + open*1.6), P(1.9, 0.02 + open*0.8)]);
+        eye(0.75, -0.2, Math.max(2, S*0.07));
+        if(lev){ for(let k=0;k<3;k++) path([P(0.5 - k*0.16,-0.4), P(0.35 - k*0.2,-0.95 - k*0.1), P(0.2 - k*0.2,-0.42)]); }
+        else path([P(0.55,-0.4), P(0.2,-0.8), P(0.05,-0.62)]);
+        break;
+      }
+      case 'hydra': {
+        line(W, body); oval(-0.8, 0, 0.95, 0.7, 22);
+        line(W*0.6, acc, 0.5); for(let k=0;k<4;k++) path([P(-1.1 + k*0.2,-0.45), P(-1.0 + k*0.2,-0.75)]);
+        line(W*0.8, body);
+        g.moveTo(...P(-1.7, 0)); for(let j=1;j<=6;j++) g.lineTo(...P(-1.7 - j*0.3, Math.sin(t*2 + j*0.7)*0.15*j));
+        for(let k=0;k<3;k++){
+          const v0 = (k - 1)*0.36, ph = k*2.1, neck = [];
+          for(let j=0;j<=8;j++){ const f = j/8; neck.push([f*1.9, v0*(1 + f*2.1) + Math.sin(t*2.2 + ph + f*3)*0.2*f]); }
+          line(W*1.7, k === 1 ? body : acc, 0.9); path(neck.map(p => P(p[0], p[1])));
+          const hu = neck[8][0], hv = neck[8][1], dr = Math.atan2(hv - neck[7][1], hu - neck[7][0]), cd = Math.cos(dr), sd = Math.sin(dr);
+          const R = (a, b)=> P(hu + a*cd - b*sd, hv + a*sd + b*cd), op = 0.05 + (Math.sin(t*3 + ph) + 1)*0.07;
+          line(W, body);
+          path([R(-0.05,-0.2), R(0.4,-0.15), R(0.62,-0.02)]); path([R(-0.05,0.2), R(0.35,0.15 + op), R(0.6,0.04 + op)]);
+          const ep = R(0.18,-0.09); g.lineStyle(0); g.beginFill(acc); g.drawCircle(ep[0], ep[1], Math.max(1.6, S*0.045)); g.endFill();
+        }
+        break;
+      }
+      case 'charybdis': {
+        const rot = t*0.5;
+        for(let k=0;k<4;k++){
+          line(W*0.8, k%2 ? body : acc, 0.7);
+          for(let j=0;j<=26;j++){
+            const a = rot*1.6 + k*Math.PI/2 + j*0.24, r = 1.55 - j*0.05;
+            if(j) g.lineTo(...P(Math.cos(a)*r, Math.sin(a)*r)); else g.moveTo(...P(Math.cos(a)*r, Math.sin(a)*r));
+          }
+        }
+        const ring = (r0, wob, n)=>{ const pts = []; for(let i=0;i<n;i++){ const a = i/n*Math.PI*2, r = r0 + Math.sin(a*5 + t*2)*wob; pts.push(P(Math.cos(a)*r, Math.sin(a)*r)); } loop(pts); };
+        line(W, body); ring(1.05, 0.05, 36);
+        line(W*0.7, acc); ring(0.62, 0.04, 28);
+        line(W*0.9, acc);
+        for(let i=0;i<14;i++){ const a = rot*0.25 + i/14*Math.PI*2; path([P(Math.cos(a - 0.1)*1.02, Math.sin(a - 0.1)*1.02), P(Math.cos(a)*0.6, Math.sin(a)*0.6), P(Math.cos(a + 0.1)*1.02, Math.sin(a + 0.1)*1.02)]); }
+        dot(0, 0, S*0.38, 0x000000, 0.85);
+        break;
+      }
     }
     g.lineStyle(0);
   }
@@ -876,13 +1349,16 @@ global.MoceanDungeons = function(ctx){
     }
     if(b.kind === 'shark'){
       bossG.visible = true; bossG.x = b.x; bossG.y = b.y; bossG.rotation = b.ang;
-      const cols = flash ? { body:0xffffff, fin:0xffffff } : SHARK_COLORS;
+      const cols = flash ? { body:0xffffff, fin:0xffffff } : (b.cols || SHARK_COLORS);
       drawFishShape(bossG, b.r*0.9, cols, t*3.2, b.state === 'charge' ? 1 : 0.45, Math.sin(t)*0.2);
       return;
     }
     bossG.visible = false;
-    const S = { crab:0.8, eel:1.05, angler:0.95, kraken:0.95 }[b.kind]*b.r;
-    drawCreature(entG, b.kind, b.x, b.y, b.ang, S, t, flash);
+    const S = (BOSS_SCALE[b.kind] || 0.9)*b.r;
+    let ang = b.ang;
+    if(b.kind === 'ghostship'){ if(Math.abs(b.vx) > 0.25) b.face = b.vx > 0 ? 1 : -1; else if(!b.face) b.face = -1; ang = b.face > 0 ? 0 : Math.PI; }
+    else if(b.kind === 'jelly') ang = -Math.PI/2 + Math.sin(t)*0.12;
+    drawCreature(entG, b.kind, b.x, b.y, ang, S, t, flash, b.pal);
   }
 
   function drawEntities(now){
@@ -903,14 +1379,48 @@ global.MoceanDungeons = function(ctx){
       entG.beginFill(0xffffff); entG.drawCircle(o.x, o.y, 12); entG.endFill();
       entG.lineStyle(3, d.accent, 0.9); entG.drawCircle(o.x, o.y, 26); entG.lineStyle(0);
     }
+    if(M.ink){
+      const k = clamp(M.ink.life/60, 0, 1);
+      for(let i=0;i<7;i++){
+        const a = i*0.9 + now*0.0004*(i%2 ? 1 : -1), rr = i === 0 ? 0 : M.ink.r*0.5;
+        entG.beginFill(0x1a0f2e, 0.22*k); entG.drawCircle(M.ink.x + Math.cos(a)*rr, M.ink.y + Math.sin(a)*rr, M.ink.r*(i === 0 ? 0.8 : 0.55)); entG.endFill();
+      }
+      entG.lineStyle(2, 0x8a6aff, 0.25*k); entG.drawCircle(M.ink.x, M.ink.y, M.ink.r); entG.lineStyle(0);
+    }
+    if(M.vortex){
+      const V = M.vortex, k = clamp(V.life/40, 0, 1);
+      for(let j=0;j<3;j++){
+        entG.lineStyle(2.5, 0xcff6ff, 0.55*k);
+        for(let i=0;i<=30;i++){
+          const a = now*0.008 + j*2.1 + i*0.3, r = 8 + i*5, px = V.x + Math.cos(a)*r, py = V.y + Math.sin(a)*r;
+          if(i) entG.lineTo(px, py); else entG.moveTo(px, py);
+        }
+      }
+      entG.lineStyle(0);
+    }
     for(const e of M.guards) drawEnemy(e, now);
     if(!M.boss.dead) drawBoss(M.boss, now); else bossG.visible = false;
     for(const p of M.shots){
       entG.lineStyle({ width:2.5, color:0xff6b6b, alpha:0.95, ...ROUND }); entG.drawCircle(p.x, p.y, 10);
       entG.lineStyle(0); entG.beginFill(0xffb3b3, 0.9); entG.drawCircle(p.x, p.y, 3.5); entG.endFill();
     }
-    entG.lineStyle(2, 0xcff6ff, 0.9);
-    for(const p of M.bubs){ entG.drawCircle(p.x, p.y, 7); }
+    for(const p of M.bubs){
+      entG.lineStyle(p.big ? 4 : 2, p.pierce ? 0xffd36a : 0xcff6ff, 0.9);
+      entG.drawCircle(p.x, p.y, p.r || 7);
+    }
+    for(const f of M.fx){
+      const k = 1 - f.life/f.max;
+      if(f.type === 'ring'){ entG.lineStyle(4*(1 - k) + 1, f.col, 0.8*(1 - k)); entG.drawCircle(f.x, f.y, f.r1*k); }
+      else if(f.type === 'wave'){
+        entG.lineStyle(10*(1 - k) + 2, 0x9be8ff, 0.7*(1 - k)); entG.drawCircle(f.x, f.y, f.r1*k);
+        entG.lineStyle(4, 0xffffff, 0.5*(1 - k)); entG.drawCircle(f.x, f.y, f.r1*k*0.92);
+      } else if(f.type === 'bolt'){
+        entG.lineStyle(3, 0xfff6a0, 0.95*(1 - k)); entG.moveTo(f.x0, f.y0);
+        const n = 8, dx = f.x1 - f.x0, dy = f.y1 - f.y0, len = Math.hypot(dx, dy) || 1;
+        for(let i=1;i<n;i++){ const j = (Math.random() - 0.5)*30; entG.lineTo(f.x0 + dx*i/n - dy/len*j, f.y0 + dy*i/n + dx/len*j); }
+        entG.lineTo(f.x1, f.y1);
+      }
+    }
     entG.lineStyle(0);
   }
 
@@ -945,6 +1455,9 @@ global.MoceanDungeons = function(ctx){
     if(formCd > 0) formCd -= dt;
     if(invuln > 0) invuln -= dt;
     if(enterCd > 0) enterCd -= dt;
+    const wasGhost = TM.ghost > 0;
+    for(const id of TIMED){ if(TM[id] > 0) TM[id] -= dt; if(CD[id] > 0) CD[id] -= dt; }
+    if(wasGhost && TM.ghost <= 0 && active && M) unstick();
 
     refreshBar();
     drawAura(now);
@@ -959,6 +1472,7 @@ global.MoceanDungeons = function(ctx){
   function speedMul(){ return look().speed * (dashT > 0 ? 2.4 : 1); }
   function gravityMul(){ return (has('wings') && keys.space) ? 0.2 : 1; }
   function levelBonus(){ return look().level; }
+  function eatMul(){ return TM.magnet > 0 ? 1.7 : 1; }          // Pearl Magnet widens your bite in open water too
   function depth(){ return M ? Math.round(baseY(M.d)/8) : 0; }
 
   /* ---------------------------------------------------- /dungeon command */
@@ -971,25 +1485,30 @@ global.MoceanDungeons = function(ctx){
     }
     if(sub === 'reset'){
       save.cleared = []; save.form = 'fish'; save.glow = false; persist();
+      TIMED.forEach(id => { TM[id] = 0; CD[id] = 0; });
       return [['Cave progress and abilities reset.', 'ok']];
     }
     if(sub === 'unlock'){
       save.cleared = DUNGEONS.map(d=>d.id); persist();
       return [['All abilities unlocked.', 'ok']];
     }
+    if(sub === 'ready'){
+      TIMED.forEach(id => { CD[id] = 0; }); dashCd = shieldCd = 0;
+      return [['All ability cooldowns refreshed.', 'ok']];
+    }
     const n = parseInt(sub, 10);
-    if(n >= 1 && n <= 5){
+    if(n >= 1 && n <= DUNGEONS.length){
       if(active) exitDungeon();
       const d = DUNGEONS[n-1];
       const p = exitPos(d, 260); player.x = p.x; player.y = p.y; player.vx = player.vy = 0; enterCd = 120;
       return [[`Teleported beside ${d.name}.`, 'ok']];
     }
-    const lines = [['Caves (/dungeon <1-5> teleports, exit, reset, unlock):', 'info']];
+    const lines = [['Caves in order (/dungeon <1-20> teleports, exit, reset, unlock, ready):', 'info']];
     for(const d of DUNGEONS){
       const ab = ABILITIES[d.ability], dx = d.x - player.x;
       const dir = Math.abs(dx) < 100 ? 'right here' : (dx > 0 ? 'east ' : 'west ') + Math.round(Math.abs(dx)/8) + ' m';
       const where = d.floatY ? `floating at ${Math.round(d.floatY/8)} m depth` : 'on the seafloor';
-      lines.push([`${d.id}. ${d.name}: ${dir}, ${where}. Boss: ${d.boss.name}. ${save.cleared.includes(d.id) ? '[cleared] ' : ''}-> ${ab.name} (${ab.key})`, 'info']);
+      lines.push([`${d.id}. ${d.legend ? '✦ ' : ''}${d.name} [${d.biome.name}]: ${dir}, ${where}. Boss: ${d.boss.name}. ${save.cleared.includes(d.id) ? '[cleared] ' : ''}-> ${ab.name} (${ab.key})`, 'info']);
     }
     return lines;
   }
@@ -997,7 +1516,7 @@ global.MoceanDungeons = function(ctx){
   return {
     get active(){ return active; },
     get _state(){ return M; },
-    update, updatePlayer, handleKey, fire, look, speedMul, gravityMul, levelBonus, depth, command
+    update, updatePlayer, handleKey, fire, look, speedMul, gravityMul, levelBonus, eatMul, depth, command, DUNGEONS
   };
 };
 
