@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>mocean</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,7 +23,7 @@
       <p class="tagline">Dive into the endless blue</p>
       <button id="play-button" class="play-btn">Play</button>
       <button id="options-button" class="options-btn">Options</button>
-      <div class="version">v1.5.0</div>
+      <div class="version">v1.6.0</div>
     </div>
   </div>
 
@@ -75,13 +77,15 @@
 
   <div id="creature-tooltip"></div>
 
-  <div id="instructions">Arrow keys to swim &nbsp;&bull;&nbsp; Space to jump out of the water &nbsp;&bull;&nbsp; eat fish &amp; land flips to earn XP &nbsp;&bull;&nbsp; dive to the seafloor caves to unlock abilities &nbsp;&bull;&nbsp; Tab for debug &nbsp;&bull;&nbsp; / for commands</div>
+  <div id="instructions">Arrow keys to swim &nbsp;&bull;&nbsp; Space to jump out of the water &nbsp;&bull;&nbsp; eat fish &amp; land flips to earn XP &nbsp;&bull;&nbsp; follow the compass east through 20 caves &amp; 7 biomes to unlock abilities &nbsp;&bull;&nbsp; Tab for debug &nbsp;&bull;&nbsp; / for commands</div>
 
   <div id="touch-controls">
     <div class="touch-area" id="touch-area"></div>
-    <div class="touch-hint">Drag anywhere to swim</div>
+    <div class="touch-hint">Hold anywhere to swim that way</div>
     <button id="jump-button" type="button">Jump</button>
   </div>
+
+  <button id="fullscreen-button" type="button" aria-label="Toggle fullscreen" title="Fullscreen">&#x26F6;</button>
 
   <div id="command-prompt" class="command-hidden">
     <div class="command-container">
@@ -92,6 +96,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/pixi.js@7.x/dist/pixi.min.js"></script>
   <script src="fish.js"></script>
+  <script src="biomes.js"></script>
   <script src="water.js"></script>
   <script src="dungeons.js"></script>
   <script src="game.js"></script>
