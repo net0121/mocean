@@ -261,10 +261,18 @@ global.MoceanDungeons = function(ctx){
   for(const id of DUNGEONS.map(d => d.ability)){
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'ability-chip';
-    b.addEventListener('pointerdown', (e)=>{ e.preventDefault(); e.stopPropagation(); activate(id); });
+    b.addEventListener('pointerdown', (e)=>{ e.preventDefault(); e.stopPropagation(); activate(id); if(isTouch.matches){ abOpen = false; refreshBar(); } });
     bar.appendChild(b);
     chips[id] = b;
   }
+
+  // on touch devices the ability chips live in a pop-up menu behind one button
+  const isTouch = window.matchMedia ? window.matchMedia('(pointer:coarse)') : { matches:false };
+  const abBtn = document.createElement('button');
+  abBtn.id = 'ability-toggle'; abBtn.type = 'button'; abBtn.textContent = 'Abilities'; abBtn.style.display = 'none';
+  abBtn.addEventListener('pointerdown', (e)=>{ e.preventDefault(); e.stopPropagation(); abOpen = !abOpen; refreshBar(); });
+  document.body.appendChild(abBtn);
+  let abOpen = false;
 
   const mapEl = document.createElement('canvas');
   mapEl.id = 'dungeon-map';
@@ -543,8 +551,14 @@ global.MoceanDungeons = function(ctx){
 
   function refreshBar(){
     const list = unlockedList();
-    bar.style.display = (isStarted() && list.length) ? 'flex' : 'none';
+    const touch = isTouch.matches, have = isStarted() && list.length > 0;
+    abBtn.style.display = (touch && have) ? 'block' : 'none';
+    bar.classList.toggle('menu', touch);
+    if(!touch) abOpen = false;
+    bar.style.display = have && (!touch || abOpen) ? 'flex' : 'none';
+    abBtn.classList.toggle('open', abOpen);
     if(!list.length) return;
+    let anyOn = false;
     for(const id of Object.keys(ABILITIES)){
       const el = chips[id], ab = ABILITIES[id];
       if(!has(id)){ el.style.display = 'none'; continue; }
@@ -552,7 +566,7 @@ global.MoceanDungeons = function(ctx){
       const [left, full] = cdOf(id);
       const waiting = left > 0 && !(id === 'shield' && shieldT > 0);
       let cls = 'ability-chip';
-      if(onOf(id)) cls += ' on';
+      if(onOf(id)) { cls += ' on'; anyOn = true; }
       else if(waiting) cls += ' cd';
       if(el.className !== cls) el.className = cls;
       const pct = waiting ? Math.round(100*(1 - left/full)) : 100;
@@ -562,6 +576,7 @@ global.MoceanDungeons = function(ctx){
       if(waiting && full > 60) txt += ' · ' + Math.ceil(left/60) + 's';
       if(el.textContent !== txt){ el.textContent = txt; el.title = ab.desc; }
     }
+    abBtn.classList.toggle('active', anyOn);
   }
 
   function drawAura(now){
