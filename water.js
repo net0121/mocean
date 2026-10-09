@@ -13,6 +13,11 @@
 
 global.MoceanWater = function(ctx){
   const { app, world, player, view, creaturesLayer, getDaylight, rand, clamp, inCave } = ctx;
+  // optional hooks so the upturned sea (see sky.js) gets the same underwater treatment
+  const isWet = ctx.isWet || (()=> player.y > 0);
+  const waterDepth = ctx.waterDepth || (()=> player.y);
+  const isInverted = ctx.isInverted || (()=> false);
+  const invSurfaceY = ctx.invSurfaceY || 0;
 
   /* ------------------------------------------------------------ currents */
 
@@ -58,11 +63,12 @@ global.MoceanWater = function(ctx){
     motesG.clear();
     if(!underCam) return;
     const surfScreen = world.y;                         // screen-y of the surface
+    const inv = isInverted(), invSurfScreen = world.y + invSurfaceY;
     const cur = current(player.x, player.y, now);
     for(const m of motes){
       const sx = (((m.u*(W+80) - player.x*m.z*0.55 + now*0.012*cur.x*m.z*6 + Math.sin(now*0.0006 + m.ph)*12) % (W+80)) + (W+80)) % (W+80) - 40;
       const sy = (((m.v*(H+80) - player.y*m.z*0.55 + now*0.004*m.z*(1 + cur.y*4) + Math.cos(now*0.0005 + m.ph)*8) % (H+80)) + (H+80)) % (H+80) - 40;
-      if(sy < surfScreen + 6) continue;
+      if(inv ? sy > invSurfScreen - 6 : sy < surfScreen + 6) continue;
       motesG.beginFill(0xdff6ff, (0.10 + 0.26*m.z) * (0.6 + 0.4*Math.sin(now*0.002 + m.ph)));
       motesG.drawCircle(sx, sy, m.r*(0.6 + m.z*0.8));
       motesG.endFill();
@@ -134,7 +140,7 @@ global.MoceanWater = function(ctx){
 
   function update(dt, now, speed){
     const W = app.screen.width, H = app.screen.height;
-    const under = player.y > 0;
+    const under = isWet();
     const cave = inCave();
     drawRays(now, W, H);
     if(cave) raysG.clear();
@@ -143,7 +149,8 @@ global.MoceanWater = function(ctx){
     drawSand(dt);
 
     vignette.width = W; vignette.height = H;
-    vignette.alpha = cave ? 0.5 : clamp(player.y/260, 0, 1) * (0.14 + clamp(player.y/6000, 0, 1)*0.4);
+    const d = waterDepth();
+    vignette.alpha = cave ? 0.5 : clamp(d/260, 0, 1) * (0.14 + clamp(d/6000, 0, 1)*0.4);
   }
 
   return { current, kick, update };
