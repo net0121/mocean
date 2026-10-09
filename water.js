@@ -31,16 +31,13 @@ global.MoceanWater = function(ctx){
 
   /* -------------------------------------------------------------- layers */
 
-  const raysG = new PIXI.Graphics();
-  raysG.blendMode = PIXI.BLEND_MODES.ADD;
   const motesG = new PIXI.Graphics();
   const trailG = new PIXI.Graphics();
   const sandG = new PIXI.Graphics();
   world.addChildAt(trailG, world.getChildIndex(creaturesLayer));
   world.addChild(sandG);
   const above = app.stage.getChildIndex(world) + 1;      // draw over the world, under the HUD-ish overlays
-  app.stage.addChildAt(raysG, above);
-  app.stage.addChildAt(motesG, above + 1);
+  app.stage.addChildAt(motesG, above);
 
   const vc = document.createElement('canvas');
   vc.width = vc.height = 256;
@@ -77,26 +74,44 @@ global.MoceanWater = function(ctx){
 
   /* --------------------------------------------------------- light rays */
 
+  // each shaft is one sprite with a baked gradient (soft sides, fades out downward). The old version stacked
+  // 5 hard-edged polygons per shaft whose edges didn't meet, which drew visible stair-step lines.
+  const rayTex = (()=>{
+    const c = document.createElement('canvas'); c.width = 64; c.height = 256;
+    const x = c.getContext('2d');
+    const v = x.createLinearGradient(0,0,0,256);
+    v.addColorStop(0,'rgba(255,255,255,1)'); v.addColorStop(1,'rgba(255,255,255,0)');
+    x.fillStyle = v; x.fillRect(0,0,64,256);
+    x.globalCompositeOperation = 'destination-in';
+    const h = x.createLinearGradient(0,0,64,0);
+    h.addColorStop(0,'rgba(255,255,255,0)'); h.addColorStop(0.5,'rgba(255,255,255,1)'); h.addColorStop(1,'rgba(255,255,255,0)');
+    x.fillStyle = h; x.fillRect(0,0,64,256);
+    return PIXI.Texture.from(c);
+  })();
+  const rays = [];
+  for(let i=0;i<8;i++){
+    const sp = new PIXI.Sprite(rayTex);
+    sp.anchor.set(0.5, 0); sp.tint = 0xcdeeff; sp.blendMode = PIXI.BLEND_MODES.ADD; sp.rotation = -Math.atan(0.34); sp.visible = false;
+    app.stage.addChildAt(sp, Math.min(above + 1 + i, app.stage.children.length));
+    rays.push(sp);
+  }
+  function hideRays(){ for(const r of rays) r.visible = false; }
+
   function drawRays(now, W, H){
-    raysG.clear();
-    if(player.y > 2200) return;
+    if(player.y > 2200){ hideRays(); return; }
     const day = getDaylight(now);
     const base = 0.06 * (0.25 + 0.75*day) * (1 - clamp(player.y/2200, 0, 1));
-    if(base < 0.004) return;
     const top = Math.max(-40, world.y);
-    if(top > H) return;
+    if(base < 0.004 || top > H){ hideRays(); return; }
     for(let i=0;i<8;i++){
       const sway = Math.sin(now*0.0002 + i*1.9)*60;
       const x0 = ((i*(W/6) - player.x*0.12 + sway) % (W+300) + (W+300)) % (W+300) - 150;
       const pulse = 0.55 + 0.45*Math.sin(now*0.0007 + i*2.3);
-      const w0 = 22 + (i%3)*14, slope = 0.34, len = 1200;
-      for(let k=0;k<5;k++){
-        const y0 = top + k*len/5, y1 = top + (k+1)*len/5;
-        raysG.beginFill(0xcdeeff, base*pulse*(1 - k/5));
-        raysG.drawPolygon([x0 + slope*(y0-top), y0, x0 + w0 + slope*(y0-top), y0,
-                           x0 + w0*2.6 + slope*(y1-top), y1, x0 + slope*(y1-top) - w0*0.4, y1]);
-        raysG.endFill();
-      }
+      const w0 = 22 + (i%3)*14, sp = rays[i];
+      sp.visible = true;
+      sp.x = x0 + w0; sp.y = top;
+      sp.width = w0*3.4; sp.height = 1200;
+      sp.alpha = clamp(base*pulse*2.2, 0, 1);
     }
   }
 
@@ -143,7 +158,7 @@ global.MoceanWater = function(ctx){
     const under = isWet();
     const cave = inCave();
     drawRays(now, W, H);
-    if(cave) raysG.clear();
+    if(cave) hideRays();
     drawMotes(now, W, H, under || cave);
     updateTrail(now, speed, under || cave);
     drawSand(dt);
