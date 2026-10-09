@@ -68,7 +68,14 @@ const Bio = MoceanBiomes;      // sea biomes (see biomes.js)
 const SURFACE_Y = 0;
 const WORLD_TOP_MARGIN = 40;
 const AIR_HEIGHT = 600;
-const AIR_TOP = SURFACE_Y - AIR_HEIGHT;
+const SkyC = MoceanSky.C;                         // altitude map of the sky + upturned sea (see sky.js)
+const INV_SURFACE_Y = SkyC.INV_SURFACE_Y;       // surface of the upside-down sea, far above the waves
+const AIR_TOP = SkyC.INV_FLOOR_Y - 400;
+// the upturned sea's rocky ceiling mirrors the real seafloor's shape
+const invFloorY = (x)=> SkyC.INV_FLOOR_Y - (floorY(x) - 8000);
+// wet = inside the real sea (below y=0) or inside the upturned sea (above its surface)
+function isWet(y){ return y >= SURFACE_Y || y <= INV_SURFACE_Y; }
+function waterDepthPx(){ return player.y >= SURFACE_Y ? player.y : (player.y <= INV_SURFACE_Y ? INV_SURFACE_Y - player.y : 0); }
 const GRAVITY = 0.15;
 const FLIP_SPEED_THRESHOLD = 0.8;
 
@@ -445,19 +452,20 @@ const PLAYER_COLORS = { body:0xff9d5c, fin:0xffd194 };
 function tryJump(){
   if(dungeons.active){ dungeons.fire(); return; }   // inside caves the jump key shoots bubbles
   if(!gameStarted || commandOpen) return;
-  if(player.y < SURFACE_Y) return;       // already airborne
+  const upturned = player.y <= INV_SURFACE_Y;     // in the upturned sea "out of the water" is DOWN
+  if(!upturned && player.y < SURFACE_Y) return;   // already airborne
   if(player.jumpCd > 0) return;
-  player.vy = -JUMP_POWER;
+  player.vy = upturned ? JUMP_POWER : -JUMP_POWER;
   player.boost = JUMP_BOOST_FRAMES;
   player.jumpCd = JUMP_COOLDOWN;
-  burstBubbles(player.x, player.y + player.size*0.5, 10);
+  burstBubbles(player.x, player.y + (upturned ? -1 : 1)*player.size*0.5, 10);
   playBlip();
   scheduleHideInstructions(8000);
 }
 
 function updatePlayer(dt){
   if(dungeons.active) return dungeons.updatePlayer(dt);   // inside a cave (see dungeons.js)
-  const wasUnderwater = player.y >= SURFACE_Y;
+  const wasUnderwater = isWet(player.y);
 
   if(player.jumpCd > 0) player.jumpCd -= dt;
   if(player.boost > 0) player.boost -= dt;
@@ -483,11 +491,14 @@ function updatePlayer(dt){
 
   const abilitySpeed = dungeons.speedMul();   // shapeshift form + dash
   ax *= abilitySpeed; ay *= abilitySpeed;
-  const inAir = player.y < SURFACE_Y;
+  const inAir = !isWet(player.y);
 
   if(inAir){
     ax *= 0.45;
     ay = ay*0.25 + GRAVITY*dungeons.gravityMul();   // Sea Wings glide
+    // thermals: rising wind columns carry you up toward the upturned sea (they ease off near its surface so you can still drop back out)
+    ay -= 0.34*MoceanSky.thermal(player.x)*(1 - 0.45*clamp((-5600 - player.y)/900, 0, 1));
+    ax += MoceanSky.windX(player.y, performance.now())*0.02;
   }
 
   player.vx += ax * dt;
@@ -495,7 +506,7 @@ function updatePlayer(dt){
 
   if(!inAir){
     // ocean current + a faint buoyant bob
-    const cur = water.current(player.x, player.y, performance.now());
+    const cur = water.current(player.x, player.y <= INV_SURFACE_Y ? INV_SURFACE_Y - player.y : player.y, performance.now());
     player.vx += cur.x * 0.03 * dt;
     player.vy += (cur.y * 0.03 + Math.sin(performance.now()*0.0013)*0.004) * dt;
   }
@@ -536,22 +547,31 @@ function updatePlayer(dt){
     if(slope * player.vx > 0) player.vx *= Math.pow(0.9, dt);   // uphill scrape slows you
   }
 
-  const nowUnderwater = player.y >= SURFACE_Y;
+  // the upturned sea's ceiling: bonk
+  const ceilLimit = invFloorY(player.x) + player.size*dungeons.look().size*0.6;
+  if(player.y < ceilLimit){
+    player.y = ceilLimit;
+    if(player.vy < -1.5) player.vy *= -0.25; else if(player.vy < 0) player.vy = 0;
+  }
+
+  const nowUnderwater = isWet(player.y);
 
   if(wasUnderwater !== nowUnderwater){
-    spawnSplash(player.x, SURFACE_Y);
+    const upturnedSurface = player.y < INV_SURFACE_Y/2;          // which of the two surfaces did we just cross?
+    spawnSplash(player.x, upturnedSurface ? INV_SURFACE_Y : SURFACE_Y);
     if(!wasUnderwater){          // diving back in: water resists, spray scales with impact
       const impact = Math.abs(player.vy);
       burstBubbles(player.x, SURFACE_Y + 10, Math.round(clamp(impact*1.4, 4, 20)));
       player.vy *= 0.6; player.vx *= 0.88;
     }
-    if(wasUnderwater && !nowUnderwater && player.vy < -FLIP_SPEED_THRESHOLD && !player.flipping){
+    const outSpeed = upturnedSurface ? player.vy : -player.vy;   // speed away from the water we just left
+    if(wasUnderwater && !nowUnderwater && outSpeed > FLIP_SPEED_THRESHOLD && !player.flipping){
       player.flipping = true;
       player.flipProgress = 0;
       player.flipDir = player.vx >= 0 ? 1 : -1;
       player.flipCounts = true;
       // faster breach = bigger flip reward
-      player.flipXP = 10 + Math.round(clamp(-player.vy, 0, 16));
+      player.flipXP = 10 + Math.round(clamp(outSpeed, 0, 16));
     }
   }
 
@@ -761,8 +781,13 @@ updateXPUI();
 let bubbles = [];
 const BUBBLE_POP_FRAMES = 9;
 
+function inBubbleWater(x, y){
+  return (y >= SURFACE_Y + 20 && y <= floorY(x) - 4) || (y <= INV_SURFACE_Y - 20 && y >= invFloorY(x) + 4);
+}
 function makeBubble(x, y, r, speed, bright){
-  return { x, y, r, r0:r, speed, wobble:rand(0,Math.PI*2), wobSpeed:rand(0.8,1.5), bright, age:0, pop:0 };
+  const inv = y < INV_SURFACE_Y/2;       // bubbles in the upturned sea "rise" DOWN, toward its surface
+  return { x, y, r, r0:r, speed, wobble:rand(0,Math.PI*2), wobSpeed:rand(0.8,1.5), bright, age:0, pop:0,
+           dir: inv ? -1 : 1, surf: inv ? INV_SURFACE_Y : SURFACE_Y };
 }
 
 // ambient bubbles rise up through the visible water; nearPlayer ones trail off the fish
@@ -776,9 +801,10 @@ function spawnBubble(nearPlayer){
     y = player.y - Math.sin(player.displayAngle)*back + rand(-5,5);
   } else {
     x = player.x + rand(-W*0.75, W*0.75);
-    y = player.y + H*0.55 + rand(0, 80);          // just below the view, so it rises into sight
+    y = player.y < INV_SURFACE_Y/2 ? player.y - H*0.55 - rand(0, 80)    // upturned sea: they enter from above the view
+                                   : player.y + H*0.55 + rand(0, 80);   // just below the view, so it rises into sight
   }
-  if(y < SURFACE_Y + 20 || y > floorY(x) - 4) return;
+  if(!inBubbleWater(x, y)) return;
   const r = nearPlayer ? rand(1.2, 3.2) : (Math.random() < 0.15 ? rand(4, 6.5) : rand(1.5, 3.8));
   bubbles.push(makeBubble(x, y, r, rand(0.4, 1.3), nearPlayer));
   if(bubbles.length > 260) bubbles.shift();
@@ -807,12 +833,12 @@ function updateBubbles(dt){
   for(const b of bubbles){
     b.age += dt;
     if(b.pop > 0){ b.pop += dt; continue; }
-    b.y -= (b.speed*0.7 + b.r0*0.12)*dt;                       // bigger bubbles rise faster
+    b.y -= b.dir*(b.speed*0.7 + b.r0*0.12)*dt;                       // bigger bubbles rise faster
     b.r = Math.min(b.r0*1.45, b.r + b.r0*0.0007*dt);            // swell a little as pressure drops
     const c = water.current(b.x, b.y, bn);
     const wig = Math.sin(bn*0.0045*b.wobSpeed + b.wobble)*0.3*(0.45 + b.r0*0.12);
     b.x += (wig + c.x*0.4)*dt;
-    if(b.y <= SURFACE_Y) b.pop = 0.01;                          // reached the surface: pop
+    if(b.dir > 0 ? b.y <= b.surf : b.y >= b.surf) b.pop = 0.01; // reached the surface: pop
   }
   bubbles = bubbles.filter(b => b.pop < BUBBLE_POP_FRAMES
     && Math.abs(b.x - player.x) < W*1.5 && Math.abs(b.y - player.y) < H*1.5);
@@ -825,11 +851,11 @@ function redrawBubbles(){
     if(b.pop > 0){                                              // surface pop: ring expands, spits droplets
       const f = b.pop/BUBBLE_POP_FRAMES;
       bubblesG.lineStyle(1.2, 0xffffff, (1 - f)*0.55);
-      bubblesG.drawCircle(b.x, SURFACE_Y, b.r*(1 + f*1.1));
+      bubblesG.drawCircle(b.x, b.surf, b.r*(1 + f*1.1));
       for(let k=0;k<4;k++){
         const a = -Math.PI*(0.15 + k*0.23);
-        bubblesG.moveTo(b.x + Math.cos(a)*b.r*(1+f), SURFACE_Y + Math.sin(a)*b.r*(1+f));
-        bubblesG.lineTo(b.x + Math.cos(a)*b.r*(1.6+f*2), SURFACE_Y + Math.sin(a)*b.r*(1.6+f*2));
+        bubblesG.moveTo(b.x + Math.cos(a)*b.r*(1+f), b.surf + Math.sin(a)*b.r*(1+f)*b.dir);
+        bubblesG.lineTo(b.x + Math.cos(a)*b.r*(1.6+f*2), b.surf + Math.sin(a)*b.r*(1.6+f*2)*b.dir);
       }
       continue;
     }
@@ -855,7 +881,7 @@ let splashes = [];
 function spawnSplash(x, y){
   splashes.push({ x, y, t: 0, life: 30 });
   for(let i=0;i<9;i++){
-    bubbles.push(makeBubble(x + rand(-12,12), y + rand(3,12), rand(1,3.2), rand(0.7,2.0), true));
+    bubbles.push(makeBubble(x + rand(-12,12), y + (y < INV_SURFACE_Y/2 ? -1 : 1)*rand(3,12), rand(1,3.2), rand(0.7,2.0), true));
   }
 }
 
@@ -1515,7 +1541,7 @@ commandInputEl.addEventListener('keydown', (e)=>{
 const COMMAND_LIST = [
   'help','clear','depth','teleport','tp','speed','spawn','clearcreatures',
   'time','weather','flip','coords','fact','8ball','roll','coinflip','rename',
-  'level','xp','resetprogress','dungeon','cave','biome'
+  'level','xp','resetprogress','dungeon','cave','biome','sky','inverted','sun','moon'
 ];
 
 const FUN_FACTS = [
@@ -1590,6 +1616,11 @@ function runCommand(raw){
       for(const [text, cls] of dungeons.command(args)) printLine(text, cls);
       break;
     }
+    case 'sky': case 'inverted': case 'sun': case 'moon': {
+      if((cmd === 'sky' || cmd === 'inverted') && dungeons.active) dungeons.command(['exit']);
+      for(const [text, cls] of sky.command(cmd, args)) printLine(text, cls);
+      break;
+    }
     case 'biome': case 'biomes': {
       const n = parseInt(args[0], 10);
       if(n >= 1 && n <= Bio.list.length){
@@ -1609,8 +1640,9 @@ function runCommand(raw){
       break;
     }
     case 'depth': {
-      const m = Math.max(0, Math.round((player.y - SURFACE_Y)/8));
-      printLine(`Current depth: ${m}m`, 'ok');
+      if(player.y <= INV_SURFACE_Y) printLine(`Upturned depth: ${Math.round((INV_SURFACE_Y - player.y)/8)}m (swim up to go deeper)`, 'ok');
+      else if(player.y < SURFACE_Y) printLine(`Altitude: ${Math.round((SURFACE_Y - player.y)/8)}m`, 'ok');
+      else printLine(`Current depth: ${Math.max(0, Math.round((player.y - SURFACE_Y)/8))}m`, 'ok');
       break;
     }
     case 'coords': {
@@ -1743,17 +1775,26 @@ const biomeBannerEl = document.createElement('div');
 biomeBannerEl.id = 'biome-banner';
 biomeBannerEl.innerHTML = '<div class="bb-small">Entering</div><div class="bb-big"></div>';
 document.body.appendChild(biomeBannerEl);
-let lastBiome = Bio.at(player.x);
+let lastPlace = Bio.at(player.x).name;
+const hudLabelEl = document.querySelector('#hud .label');
 
 function updateHUD(){
-  depthValEl.textContent = dungeons.active ? dungeons.depth() : Math.max(0, Math.round((player.y - SURFACE_Y)/8));
+  let hudLabel = 'Depth', hudVal;
+  if(dungeons.active) hudVal = dungeons.depth();
+  else if(player.y <= INV_SURFACE_Y){ hudLabel = 'Depth (upturned)'; hudVal = Math.round((INV_SURFACE_Y - player.y)/8); }
+  else if(player.y < SURFACE_Y){ hudLabel = 'Altitude'; hudVal = Math.round((SURFACE_Y - player.y)/8); }
+  else hudVal = Math.max(0, Math.round((player.y - SURFACE_Y)/8));
+  depthValEl.textContent = hudVal;
+  if(hudLabelEl && hudLabelEl.textContent !== hudLabel) hudLabelEl.textContent = hudLabel;
   if(dungeons.active){ biomeLabelEl.textContent = dungeons._state ? dungeons._state.d.name : ''; return; }
   const b = Bio.at(player.x);
-  if(biomeLabelEl.textContent !== b.name) biomeLabelEl.textContent = b.name;
-  if(b !== lastBiome){
-    lastBiome = b;
+  const zone = sky.zoneAt(player.y, player.x);                       // sky zones & the upturned sea
+  const place = (zone && zone !== 'Sea Breeze') ? zone : b.name;     // (jumping through Sea Breeze shouldn't spam banners)
+  if(biomeLabelEl.textContent !== place) biomeLabelEl.textContent = place;
+  if(place !== lastPlace){
+    lastPlace = place;
     if(gameStarted){
-      biomeBannerEl.children[1].textContent = b.name;
+      biomeBannerEl.children[1].textContent = place;
       biomeBannerEl.classList.remove('show'); void biomeBannerEl.offsetWidth; biomeBannerEl.classList.add('show');
     }
   }
@@ -1763,7 +1804,9 @@ function updateHUD(){
 
 const water = MoceanWater({
   app, world, player, view, creaturesLayer, getDaylight, rand, clamp,
-  inCave: ()=> dungeons.active
+  inCave: ()=> dungeons.active,
+  isWet: ()=> isWet(player.y), waterDepth: waterDepthPx,
+  isInverted: ()=> player.y <= INV_SURFACE_Y, invSurfaceY: INV_SURFACE_Y
 });
 
 const dungeons = MoceanDungeons({
@@ -1778,6 +1821,24 @@ const dungeons = MoceanDungeons({
   hideWhenInside(inside){
     for(const o of [skyG, terrainG, creaturesLayer, surfaceG, waterOverlayG]) o.visible = !inside;
   }
+});
+
+/* ============================= SKY, SUN & MOON, UPTURNED SEA (see sky.js) ============================= */
+
+function getMouth(){
+  const formSize = player.size * dungeons.look().size;
+  return {
+    x: player.x + Math.cos(player.displayAngle)*formSize*0.55,
+    y: player.y + Math.sin(player.displayAngle)*formSize*0.55,
+    reach: formSize*0.85*dungeons.eatMul()
+  };
+}
+
+const sky = MoceanSky({
+  app, world, player, creaturesLayer, skyG, Bio, getDaylight, getCycleTime, rand, randi, clamp, lerp, lerpAngle,
+  floorY, inCave: ()=> dungeons.active, drawFishShape, attachHoverLabel, burstBubbles,
+  eaten: eatenEffect, getMouth, getBrightness: ()=> options.brightness,
+  isStarted: ()=> gameStarted, ROUND
 });
 
 /* ============================= MAIN LOOP ============================= */
@@ -1823,7 +1884,7 @@ app.ticker.add((rawDt)=>{
   const speed = updatePlayer(dt);
   if(!dungeons.active){
     updateNPCs(dt);
-    trySpawn(dt);
+    if(player.y > -1200) trySpawn(dt);       // no sea creatures spawn while you're high in the sky
     checkEating();
   }
   dungeons.update(dt);
@@ -1867,6 +1928,7 @@ app.ticker.add((rawDt)=>{
     updateWaterBackground(now);
   }
   water.update(dt, now, speed);
+  sky.update(dt, now);
   refreshOceanHover();
   updateHUD();
   updateDebugDisplay();
