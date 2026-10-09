@@ -108,7 +108,22 @@ global.MoceanDungeons = function(ctx){
     [19,'Charybdis Maw',      14,9,10, 0x2a2a5a,0x0b0b1f,0x7a9bff, 4600, 'cannon',    ['jelly','angler','crab','eel'],
       { kind:'charybdis', name:'Charybdis, the Devouring Maw', r:84, legend:true } ],
     [20,"Leviathan's Throne", 15,10,10, 0x3a2a6a,0x0e0a22,0xffd36a, 0,   'tsunami',    ['eel','angler','jelly','crab','puffer'],
-      { kind:'leviathan', name:'Leviathan, the Sea Serpent King', r:92, legend:true } ]
+      { kind:'leviathan', name:'Leviathan, the Sea Serpent King', r:92, legend:true } ],
+    [21,'Abyssal Gauntlet',16,10,12,0x252b48,0x090d1b,0x8aa8ff,-6800,'cannon',['kraken','eel','angler'],{kind:'sky_crown',name:'Astraeus, the Void Crown',r:96,legend:true,pal:[0x8aa8ff,0xe5f0ff]}],
+    [22,'The Drowned Archive',17,11,13,0x34475a,0x0b1722,0x9be8ff,-7120,'glow',['ghostship','jelly','urchin'],{kind:'sky_archivist',name:'Mnemora, the Star Archivist',r:102,legend:true,pal:[0x9be8ff,0xffffff]}],
+    [23,'Black Coral Cathedral',18,11,14,0x462c56,0x14091c,0xff8fdb,-7440,'shield',['siren','angler','crab'],{kind:'sky_seraph',name:'Vespera, Coral Seraph',r:100,legend:true,pal:[0xff8fdb,0xffd7f2]}],
+    [24,'The Furnace Below',19,12,15,0x623321,0x1c0a05,0xff713b,-7760,'riptide',['dragon','eel','puffer'],{kind:'sky_solar',name:'Heliophage, the Sun-Eater',r:108,legend:true,pal:[0xff713b,0xffdf75]}],
+    [25,'Glacier of Teeth',20,12,16,0x4a6377,0x101c29,0xc9f5ff,-8080,'ripple',['shark','turtle','urchin'],{kind:'sky_frost',name:'Nix-Null, the Frozen Comet',r:112,legend:true,pal:[0xc9f5ff,0xffffff]}],
+    [26,'The Starless Maze',21,13,17,0x32264f,0x0d0718,0xc7a4ff,-8400,'ghost',['hydra','jelly','angler'],{kind:'sky_wraith',name:'The Umbral Choir',r:112,legend:true,pal:[0xc7a4ff,0x6540a8]}],
+    [27,'Throne of Broken Tides',22,13,18,0x254e62,0x07151e,0x65e6ff,-8720,'tsunami',['serpent','kraken','eel'],{kind:'sky_titan',name:'Pelagor, Sky-Tide Titan',r:118,legend:true,pal:[0x65e6ff,0xd9ffff]}],
+    [28,'The Hollow Moon',23,14,19,0x4b3e72,0x110d24,0xe2c7ff,-9040,'cannon',['ray','siren','angler'],{kind:'sky_moon',name:'Lunaclysm, the Hollow Moon',r:120,legend:true,pal:[0xe2c7ff,0xffffff]}],
+    [29,'Grave of the First Sea',24,14,20,0x343a49,0x080b13,0xc4d6e8,-9360,'shield',['ghostship','charybdis','kraken'],{kind:'sky_reaper',name:'The First Reaper',r:124,legend:true,pal:[0xc4d6e8,0x7d8aa8]}],
+    [30,'The Endless Pressure',25,15,21,0x1d3c50,0x050d15,0x55cfff,-9680,'riptide',['leviathan','serpent','hydra'],{kind:'sky_maelstrom',name:'Vortexion, the Living Maelstrom',r:128,legend:true,pal:[0x55cfff,0x9b7cff]}],
+    [31,'Tempest Engine',26,15,22,0x3d405d,0x0c0d1b,0xffc56f,-10000,'tsunami',['dragon','ray','eel'],{kind:'sky_tempest',name:'Keraunos, Storm-Heart',r:132,legend:true,pal:[0xffc56f,0xffffff]}],
+    [32,'The Shattered Current',27,16,23,0x27575a,0x06191a,0x78ffe0,-10320,'cannon',['hydra','kraken','siren'],{kind:'sky_prism',name:'Prismarch, the Shattered Current',r:136,legend:true,pal:[0x78ffe0,0xff8fdb]}],
+    [33,'Abyss Without End',28,16,24,0x2b2145,0x080511,0xd59bff,-10640,'ghost',['charybdis','leviathan','angler'],{kind:'sky_null',name:'Nullith, the Unmaking',r:140,legend:true,pal:[0xd59bff,0x3a245f]}],
+    [34,'The Last Horizon',29,17,25,0x263f68,0x060c20,0x9be8ff,-10960,'tsunami',['serpent','dragon','kraken'],{kind:'sky_horizon',name:'Horizara, World-Ender',r:146,legend:true,pal:[0x9be8ff,0xffd36a]}],
+    [35,'Lotan’s End',31,18,28,0x33205d,0x070313,0xffd36a,-11280,'tsunami',['leviathan','hydra','charybdis','dragon'],{kind:'sky_lotan',name:'Leviathan-Lotan, TRUE Final Boss',r:172,legend:true,finalBoss:true,pal:[0xffd36a,0x9b7cff]}]
   ];
 
   /* Every cave is strictly bigger than the one before it (maze area), has more guardians, and its boss has
@@ -122,13 +137,35 @@ global.MoceanDungeons = function(ctx){
     const guards = 3 + id + Math.floor(id/3);              // 4 in cave 1 ... 29 in cave 20
     // boss health: caves 10+ ramp much harder (longer bars); never lower than the previous boss
     let bossHp = (id < 10 ? 12 + 3*id : (12 + 4*id)*(1 + 0.08*(id - 9))) * (boss.legend ? (id < 10 ? 1.4 : 1.12) : 1);
+    if(id >= 21) bossHp *= 1.55 + (id - 21)*0.12;
+    if(boss.finalBoss) bossHp *= 5.5;
     bossHp = Math.max(Math.round(bossHp), prevBossHp + 2);
     prevBossHp = bossHp;
-    const d = { id, name, x:BIO.dungeonX(id), mw, mh, guards, wall, floor, accent, ability, enemies, boss, bossHp };
+    const d = { id, name, x:BIO.dungeonX(id), mw, mh, guards, wall, floor, accent, ability, enemies, boss, bossHp, finalBoss:!!boss.finalBoss };
     if(floatY) d.floatY = floatY;
     d.rock = BIO.mixHex(wall, 0x202028, 0.45);          // entrance rock colour
     d.biome = BIO.biomeForCave(id);
     d.legend = !!boss.legend;
+    // The Sky Sea has a bespoke environmental identity per dungeon: floor motifs,
+    // hazard families, and a themed hidden vault rather than a palette-only reskin.
+    const SKY_THEMES = [
+      ['Astra Crown Reach','star-runes','gravity wells',0x8aa8ff],
+      ['Archive of Falling Stars','constellations','starlight mines',0x9be8ff],
+      ['Black Coral Basilica','coral-spires','thorn blooms',0xff8fdb],
+      ['Solar Furnace','magma-veins','ember vents',0xff713b],
+      ['Cometglass Glacier','ice-fractures','frost bursts',0xc9f5ff],
+      ['Choir of the Starless','void-sigils','void pulses',0xc7a4ff],
+      ['Broken Tide Throne','tidal-rings','surge currents',0x65e6ff],
+      ['Hollow Moon Grotto','lunar-phases','moon shards',0xe2c7ff],
+      ['First Sea Ossuary','bone-mosaics','soul wisps',0xc4d6e8],
+      ['Endless Pressure Engine','maelstrom-spirals','pressure bursts',0x55cfff],
+      ['Stormheart Foundry','lightning-traces','storm strikes',0xffc56f],
+      ['Prismatic Shatterways','prism-facets','prism beams',0x78ffe0],
+      ['Null Sea Expanse','erasure-marks','null zones',0xd59bff],
+      ['World-End Horizon','horizon-arcs','horizon waves',0x9be8ff],
+      ['Lotan’s Secret Reliquary','ancient-scales','Lotan surge',0xffd36a]
+    ];
+    if(id >= 21){ const sky = SKY_THEMES[id-21]; d.skyTheme = { name:sky[0], motif:sky[1], hazardName:sky[2], hazardColor:sky[3] }; }
     boss.legend = d.legend;
     return d;
   });
@@ -144,7 +181,7 @@ global.MoceanDungeons = function(ctx){
 
     rapid:   { name:'Rapid Bubbles',    key:'Q', dur:360, cd:900,  caveOnly:true,  desc:'Fire bubbles 2.6x faster for 6 s' },
     triple:  { name:'Triple Shot',      key:'E', dur:480, cd:1080, caveOnly:true,  desc:'Bubbles fly in a 3-way fan for 8 s' },
-    heal:    { name:'Tide Heal',        key:'T',          cd:2700, caveOnly:true,  desc:'Restore 2 hearts' },
+    heal:    { name:'Tide Heal',        key:'T',          cd:2700, caveOnly:true,  desc:'Restore 2 hearts, plus 1 for every 2 heart upgrades' },
     magnet:  { name:'Pearl Magnet',     key:'U', dur:600, cd:1500,                desc:'Pearls fly to you and you eat from further away for 10 s' },
     camo:    { name:'Camouflage',       key:'C', dur:360, cd:1680, caveOnly:true,  desc:'Guardians and bosses lose track of you for 6 s' },
     ink:     { name:'Ink Cloud',        key:'Y', dur:360, cd:1320, caveOnly:true,  desc:'A cloud that blinds and slows guardians and eats enemy shots' },
@@ -468,7 +505,8 @@ global.MoceanDungeons = function(ctx){
     ripple: ()=> { ringFx(player.x, player.y, 460, 0x9be8ff); return true; },
     heal:   ()=> {
       if(M.php >= maxHp()){ popText('Already at full health', 'warn'); return false; }
-      M.php = Math.min(maxHp(), M.php + 2); caveHud._key = null;
+      const healAmount = 2 + Math.floor((save.up.hearts || 0) / 2);
+      M.php = Math.min(maxHp(), M.php + healAmount); caveHud._key = null;
       ringFx(player.x, player.y, 200, 0x7dff9e);
       return true;
     },
@@ -686,7 +724,7 @@ global.MoceanDungeons = function(ctx){
   }
 
   function checkEnter(){
-    if(enterCd > 0 || player.y < 40) return;
+    if(enterCd > 0) return; // Floating Sky Sea entrances are far above y=0; they must remain enterable.
     for(const d of DUNGEONS){
       const dx = player.x - d.x, dy = player.y - mouthY(d);
       if(dx*dx + dy*dy < 55*55){ enterDungeon(d); return; }
@@ -747,6 +785,22 @@ global.MoceanDungeons = function(ctx){
         mazeG.beginFill(0xffffff, 0.03); mazeG.drawRect(x*T, y*T, T, T); mazeG.endFill();
       }
     }
+    if(d.skyTheme){
+      // Deterministic ornament makes every floating dungeon visually distinct.
+      for(let y=1;y<m.H-1;y++) for(let x=1;x<m.W-1;x++){
+        if(m.g[y][x] !== 0) continue;
+        const h = Math.abs(Math.sin(x*12.9898 + y*78.233 + d.id*37.719));
+        const px=(x+0.5)*T, py=(y+0.5)*T;
+        if((x*3+y*5+d.id)%11===0){
+          mazeG.lineStyle(2, d.skyTheme.hazardColor, 0.14+0.08*Math.sin(x+y));
+          if(d.id%4===1){ mazeG.drawCircle(px,py,12+h*9); mazeG.drawCircle(px,py,22+h*10); }
+          else if(d.id%4===2){ mazeG.moveTo(px-15,py+10); mazeG.lineTo(px,py-15); mazeG.lineTo(px+15,py+10); }
+          else if(d.id%4===3){ mazeG.moveTo(px-17,py); mazeG.lineTo(px+17,py); mazeG.moveTo(px,py-17); mazeG.lineTo(px,py+17); }
+          else { mazeG.moveTo(px-15,py-10); mazeG.lineTo(px+15,py+10); mazeG.moveTo(px+15,py-10); mazeG.lineTo(px-15,py+10); }
+        }
+        if((x*7+y*2+d.id)%17===0){ mazeG.lineStyle(0); mazeG.beginFill(d.skyTheme.hazardColor,0.13); mazeG.drawCircle(px,py,4+h*4); mazeG.endFill(); }
+      }
+    }
     mazeG.lineStyle(3, d.accent, 0.4);
     for(let y=0;y<m.H;y++) for(let x=0;x<m.W;x++){
       if(m.g[y][x] !== 1) continue;
@@ -754,6 +808,17 @@ global.MoceanDungeons = function(ctx){
       if(!wall(x,y+1)){ mazeG.moveTo(x*T, (y+1)*T);   mazeG.lineTo((x+1)*T, (y+1)*T); }
       if(!wall(x-1,y)){ mazeG.moveTo(x*T, y*T);       mazeG.lineTo(x*T, (y+1)*T); }
       if(!wall(x+1,y)){ mazeG.moveTo((x+1)*T, y*T);   mazeG.lineTo((x+1)*T, (y+1)*T); }
+    }
+    if(d.skyTheme && m.vaultRoom){
+      const r=m.vaultRoom;
+      mazeG.lineStyle(3,d.skyTheme.hazardColor,0.75);
+      mazeG.drawRect(r.left*T+5,r.top*T+5,(r.right-r.left+1)*T-10,(r.bottom-r.top+1)*T-10);
+      mazeG.lineStyle(0); mazeG.beginFill(d.skyTheme.hazardColor,0.08);
+      mazeG.drawRect((r.left+1)*T,(r.top+1)*T,(r.right-r.left-1)*T,(r.bottom-r.top-1)*T); mazeG.endFill();
+      // A brighter lintel marks the vault's only entrance without exposing the chest.
+      mazeG.lineStyle(4,d.skyTheme.hazardColor,0.65);
+      mazeG.moveTo((r.left+1)*T,r.bottom*T); mazeG.lineTo((r.left+2)*T,r.bottom*T);
+      mazeG.lineTo((r.left+3)*T,r.bottom*T);
     }
   }
 
@@ -763,6 +828,19 @@ global.MoceanDungeons = function(ctx){
     const m = genMaze(d.mw, d.mh, d.legend, d.id);
     buildMazeGraphics(d, m);
 
+    let treasure = null;
+    if(d.skyTheme){
+      // A real optional side chamber inside the boss arena. Its chest only awakens
+      // after the boss falls, so the player can explore it before claiming the relic.
+      const A = m.arena, left=A.x0+A.w-6, right=A.x0+A.w-1, top=A.y0+1, bottom=A.y0+5;
+      for(let x=left;x<=right;x++){ m.g[top][x]=1; m.g[bottom][x]=1; }
+      for(let y=top;y<=bottom;y++){ m.g[y][left]=1; m.g[y][right]=1; }
+      m.g[bottom][left+2]=0; // doorway facing the arena
+      for(let y=top+1;y<bottom;y++) for(let x=left+1;x<right;x++) m.g[y][x]=0;
+      m.vaultRoom={left,top,right,bottom};
+      treasure={x:(left+2.5)*T,y:(top+2.5)*T,got:false,active:false,room:m.vaultRoom};
+      buildMazeGraphics(d,m);
+    }
     const pearls = [], cells = [];
     for(let cy=0; cy<d.mh; cy++) for(let cx=0; cx<d.mw; cx++){
       cells.push([cx,cy]);
@@ -786,16 +864,32 @@ global.MoceanDungeons = function(ctx){
                     cd: rand(60, 160) });
     }
     const A = m.arena, ac = { x:(A.x0 + A.w/2)*T, y:(A.y0 + A.h/2)*T };
+    const startPos = cellPos(0,0);
+    const hazards=[];
+    if(d.skyTheme){
+      const candidates=[];
+      for(let cy=1;cy<d.mh;cy++) for(let cx=1;cx<d.mw;cx++){
+        const cell=cellPos(cx,cy);
+        if(Math.hypot(cell.x-startPos.x,cell.y-startPos.y)<T*3) continue;
+        if(m.open[cy][cx].length>0 && !(cx===m.orbCell[0]&&cy===m.orbCell[1])) candidates.push(cell);
+      }
+      // Select reproducible-looking but shuffled hazard positions from deep maze cells.
+      const count=Math.min(5+Math.floor(d.id/4),candidates.length);
+      for(let i=0;i<count;i++){
+        const j=randi(0,candidates.length-1), pos=candidates.splice(j,1)[0];
+        hazards.push({x:pos.x,y:pos.y,r:26+(d.id%3)*3,phase:(i*83+d.id*29)%240,tick:(i*83+d.id*29)%240,hitCd:0,kind:d.id%5});
+      }
+    }
     const hp = Math.max(5, Math.round(d.bossHp*df.bossHp)), elite = d.id >= 10, tier = Math.max(0, d.id - 9);
     const boss = Object.assign({ hp, max:hp, x:ac.x + 200, y:ac.y, vx:0, vy:0, ang:Math.PI, state:'idle',
                                  t:0, hit:0, active:false, dead:false, atk:'charge', tx:ac.x, ty:ac.y,
                                  elite, tier, armor: elite ? Math.min(0.25, 0.025*tier) : 0,
                                  phase:1, shieldT:0, lastAtk:'', orb:rand(0, 6.28), orbDir:Math.random() < 0.5 ? 1 : -1,
                                  lkx:player.x, lky:player.y }, d.boss);
-    const start = cellPos(0,0);
+    const start = startPos;
     const seen = Array.from({length:m.H}, ()=> new Array(m.W).fill(false));
 
-    M = { d, m, pearls, guards, start, orb:ac, ac, orbOn:false, seen, armed:false, done:false, frame:0,
+    M = { d, m, pearls, guards, hazards, treasure, start, checkpoint:null, orb:ac, ac, orbOn:false, seen, armed:false, done:false, frame:0,
           boss, shots:[], bubs:[], php:maxHp(), fireCd:0, sealed:false, fx:[], vortex:null, ink:null, sonarT:0 };
     const cell = Math.max(4, Math.floor(Math.min(230/m.W, 170/m.H)));
     mapEl.width = m.W*cell; mapEl.height = m.H*cell; M.cell = cell;
@@ -809,19 +903,38 @@ global.MoceanDungeons = function(ctx){
     hideHoverLabel();
     waterBgEl.style.display = 'none';
     dungeonC.visible = true; darkS.visible = true; mapEl.style.display = 'block';
-    showBanner('Entering', d.name, d.biome.name + ' · ' + (d.legend ? 'A Mythical Sea Legend waits at the far end.' : 'Space shoots bubbles. Beat the boss, then take the relic.'));
+    showBanner('Entering', d.name, d.skyTheme ? (d.skyTheme.name + ' · Beware ' + d.skyTheme.hazardName + '; defeat the boss to unlock the hidden Sky Vault.') : (d.biome.name + ' · ' + (d.legend ? 'A Mythical Sea Legend waits at the far end.' : 'Space shoots bubbles. Beat the boss, then take the relic.')));
     playBlip();
+  }
+
+  // The Loch Ness Monster is an overworld-triggered boss that reuses the full dungeon combat system.
+  // It is deliberately not added to the numbered campaign, so the 35-dungeon route stays intact.
+  function startLochNessEncounter(ret){
+    if(active || !isStarted()) return false;
+    const source = DUNGEONS[34];
+    const d = Object.assign({}, source, {
+      id:36, name:'Loch Ness Monster — Overworld Guardian', x:source.x + 1700,
+      mw:14, mh:10, guards:12, bossHp:520, finalBoss:false,
+      ability:'tsunami', enemies:['leviathan','serpent','shark'],
+      boss:{ kind:'leviathan', name:'The Loch Ness Monster', r:150, legend:true, elite:true, pal:[0x2a8f9e,0x9be8ff] },
+      legend:true, biome:BIO.biomeForCave(20), returnPos: ret || null
+    });
+    delete d.floatY; delete d.skyTheme;
+    enterDungeon(d);
+    showBanner('OVERWORLD BOSS AWAKENED', 'The Loch Ness Monster', 'Your dungeon abilities and boss combat are active! Hold Space to fire bubbles and use your unlocked abilities.');
+    return true;
   }
 
   function exitDungeon(){
     if(!active) return;
     const d = M.d;
     active = false;
+    if(window.MoceanFinalMusicStop) window.MoceanFinalMusicStop();
     dungeonC.visible = false; darkS.visible = false; mapEl.style.display = 'none'; caveHud.style.display = 'none';
     if(caveHover){ hideHoverLabel(caveHover); caveHover = null; }
     hideWhenInside(false);
     waterBgEl.style.display = '';
-    const p = exitPos(d, 230);
+    const p = d.returnPos || exitPos(d, 230);   // overworld boss: back beside the monster, not at cave 35's coordinates
     player.x = p.x; player.y = p.y;
     player.vx = player.vy = 0;
     enterCd = 180;
@@ -896,7 +1009,8 @@ global.MoceanDungeons = function(ctx){
   function defeat(){
     M.fx.length = 0; M.vortex = null; M.ink = null; TM.ghost = 0;
     M.php = maxHp(); M.shots.length = 0; M.bubs.length = 0; M.armed = false;
-    player.x = M.start.x; player.y = M.start.y; player.vx = player.vy = 0;
+    const cp = M.checkpoint || M.start;
+    player.x = cp.x; player.y = cp.y; player.vx = player.vy = 0;
     invuln = 120;
     const b = M.boss;
     if(!b.dead){
@@ -904,7 +1018,7 @@ global.MoceanDungeons = function(ctx){
       b.phase = 1; b.shieldT = 0; b.lastAtk = '';
       if(M.sealed){ M.sealed = false; setDoor(false); }
     }
-    popText('Swept back to the start!', 'warn');
+    popText(M.checkpoint ? 'Checkpoint restored!' : 'Swept back to the start!', 'warn');
   }
 
   function damagePlayer(fx, fy, n){
@@ -982,7 +1096,15 @@ global.MoceanDungeons = function(ctx){
     siren:['spiral','fan','ring'], ghostship:['charge','fan','spiral','ring'], dragon:['fan','charge','spiral','ring'],
     turtle:['ring','charge','spiral'], serpent:['charge','fan','spiral','charge'],
     hydra:['fan','fan','spiral','ring'], charybdis:['spiral','ring','spiral','fan'],
-    leviathan:['charge','spiral','fan','ring','spiral']
+    leviathan:['charge','spiral','fan','ring','spiral','sweep','barrage','homing'],
+    sky_crown:['ring','blink','homing','spiral','barrage'], sky_archivist:['aimed','spiral','homing','ring'],
+    sky_seraph:['fan','sweep','ring','blink'], sky_solar:['charge','barrage','ring','sweep'],
+    sky_frost:['ring','aimed','sweep','homing'], sky_wraith:['blink','spiral','homing','fan'],
+    sky_titan:['charge','sweep','barrage','ring'], sky_moon:['ring','blink','aimed','spiral'],
+    sky_reaper:['homing','barrage','blink','ring'], sky_maelstrom:['spiral','sweep','ring','homing'],
+    sky_tempest:['barrage','charge','sweep','aimed'], sky_prism:['ring','fan','blink','homing'],
+    sky_null:['homing','spiral','barrage','blink'], sky_horizon:['sweep','charge','ring','homing'],
+    sky_lotan:['charge','spiral','fan','ring','sweep','barrage','homing','blink']
   };
   // Elite bosses (caves 10+) learn extra tricks as the caves get deeper: [attack, first tier that has it]
   const ELITE_EXTRA = [['aimed', 1], ['homing', 2], ['sweep', 4], ['blink', 6], ['barrage', 8]];
@@ -1009,13 +1131,17 @@ global.MoceanDungeons = function(ctx){
     if(!b.active){
       if(player.x > (A.x0 + 1)*T){
         b.active = true; M.sealed = true; setDoor(true); b.state = 'rest'; b.t = 70;
-        showBanner(b.legend ? 'Mythical Sea Legend' : (b.elite ? 'Elite Boss' : 'Boss'), b.name, b.elite ? 'It leads its shots, blinks and raises shields. Pop its orbs!' : 'Shoot it with Space!');
+        if(M.d.id === 35 && window.MoceanFinalMusicStart) window.MoceanFinalMusicStart();
+        M.checkpoint = { x:(A.x0 + 1.5)*T, y:(A.y0 + A.h/2)*T };
+        popText('BOSS CHECKPOINT SET', 'good');
+        showBanner(M.d.finalBoss ? 'TRUE FINAL BOSS' : (b.legend ? 'Mythical Sea Legend' : (b.elite ? 'Elite Boss' : 'Boss')), b.name, M.d.finalBoss ? 'Survive the Lotan surge: charges, spirals, aimed barrages and relentless rings!' : (b.elite ? 'It leads its shots, blinks and raises shields. Pop its orbs!' : 'Shoot it with Space!'));
       }
       return;
     }
     const frac = b.hp/b.max, tier = b.tier, camo = TM.camo > 0;
     let rage;
-    if(b.elite) rage = 1 + (1 - frac)*(0.35 + 0.025*tier) + (b.legend ? 0.08 : 0);       // elites ramp up as they bleed
+    if(b.elite) rage = 1 + (1 - frac)*(0.35 + 0.025*tier) + (b.legend ? 0.08 : 0);
+    if(M.d.finalBoss) rage *= 1.65 + (1-frac)*0.8;       // elites ramp up as they bleed
     else rage = b.legend ? 1 + (1 - frac)*0.5 : (frac < 0.5 ? 1.15 : 1);                  // legends get angrier as they bleed
     const rt = (b.elite ? 0.72 : 1)*dif().rest;                                                         // elites rest less between attacks
     const x0 = A.x0*T + b.r, x1 = (A.x0 + A.w)*T - b.r, y0 = A.y0*T + b.r, y1 = (A.y0 + A.h)*T - b.r;
@@ -1087,7 +1213,7 @@ global.MoceanDungeons = function(ctx){
           b.state = 'rest'; b.t = 70/rage;
         } else {
           if(b.atk === 'ring'){
-            const n = b.elite ? Math.min(20, 10 + tier) : (b.legend ? 12 : 8);
+            const n = M.d.finalBoss ? 28 : (b.elite ? Math.min(20, 10 + tier) : (b.legend ? 12 : 8));
             for(let i=0;i<n;i++) shoot(b.x, b.y, i/n*Math.PI*2 + b.ang, 2.4*rage);
             if(b.elite && tier >= 6) for(let i=0;i<n;i++) shoot(b.x, b.y, (i + 0.5)/n*Math.PI*2 + b.ang, 1.6*rage);   // a slower second ring in the gaps
           } else if(b.atk === 'aimed'){
@@ -1101,7 +1227,7 @@ global.MoceanDungeons = function(ctx){
             const a = b.elite ? aimAt(3.4*rage, 0.6) : toP;
             for(let i=0;i<n;i++) shoot(b.x, b.y, a + (i - (n-1)/2)*(b.elite ? 0.26 : 0.3), 3.4*rage);
           }
-          b.state = 'rest'; b.t = rand(110, 170)/rage*rt;
+          b.state = 'rest'; b.t = rand(M.d.finalBoss ? 38 : 110, M.d.finalBoss ? 68 : 170)/rage*rt;
         }
       }
     } else if(b.state === 'charge'){
@@ -1141,10 +1267,11 @@ global.MoceanDungeons = function(ctx){
   function killBoss(){
     const b = M.boss, d = M.d;
     b.dead = true; M.orbOn = true; M.shots.length = 0;
+    if(M.d.id === 36) window.MoceanLochNessDefeated = true;
     if(M.sealed){ M.sealed = false; setDoor(false); }
     for(let i=0;i<4;i++) burstBubbles(b.x + rand(-40,40), b.y + rand(-40,40), 12);
     gain((d.legend ? 100 : 60)*d.id, d.legend ? 'Sea Legend slain!' : 'Boss defeated!');
-    showBanner(d.legend ? 'Sea Legend defeated' : 'Boss defeated', b.name, 'Take the glowing relic!');
+    showBanner(d.legend ? 'Sea Legend defeated' : 'Boss defeated', b.name, d.skyTheme ? 'The hidden Sky Vault is awake! Search the arena for its treasure before taking the relic.' : 'Take the glowing relic!');
   }
 
   function updateDungeon(dt, now){
@@ -1223,6 +1350,16 @@ global.MoceanDungeons = function(ctx){
     }
     if(I){ I.life -= dt; if(I.life <= 0) M.ink = null; }
 
+    // Sky Sea environmental hazards cycle through a clear warning and active phase.
+    for(const h of M.hazards){
+      h.tick=(h.tick+eDt)%240;
+      if(h.hitCd>0) h.hitCd-=eDt;
+      const activeHazard=h.tick>95 && h.tick<155;
+      if(activeHazard && h.hitCd<=0 && !safe() && Math.hypot(player.x-h.x,player.y-h.y)<h.r+pr){
+        h.hitCd=70; damagePlayer(h.x,h.y,1);
+      }
+    }
+
     // boss + its shots
     updateBoss(eDt);
     if(b.active && !b.dead && !safe() && Math.hypot(player.x - b.x, player.y - b.y) < b.r + pr*0.7)
@@ -1255,6 +1392,13 @@ global.MoceanDungeons = function(ctx){
     for(let i=M.fx.length-1;i>=0;i--){ M.fx[i].life -= dt; if(M.fx[i].life <= 0) M.fx.splice(i,1); }
     if(M.sonarT > 0) M.sonarT -= dt;
 
+    if(M.treasure && M.boss.dead && !M.treasure.got){
+      M.treasure.active=true;
+      if(Math.hypot(player.x-M.treasure.x,player.y-M.treasure.y)<42+pr){
+        M.treasure.got=true; M.php=Math.min(maxHp(),M.php+2); gain(180*M.d.id,'Secret Sky Vault!');
+        burstBubbles(M.treasure.x,M.treasure.y,22); playBlip(); popText('VAULT LOOTED · +2 HEARTS','good');
+      }
+    }
     if(M.orbOn && !M.done && Math.hypot(player.x - M.orb.x, player.y - M.orb.y) < 46 + pr) completeDungeon();
     const pd = Math.hypot(player.x - M.start.x, player.y - M.start.y);
     if(pd > 180) M.armed = true;
@@ -1278,7 +1422,7 @@ global.MoceanDungeons = function(ctx){
     if(key === caveHud._key) return;
     caveHud._key = key;
     caveHud.style.display = 'block';
-    const cls = (b.legend ? ' legend' : '') + (b.elite ? ' elite' : '') + (shielded ? ' shielded' : '');
+    const cls = (b.legend ? ' legend' : '') + (b.elite ? ' elite' : '') + (M.d.finalBoss ? ' final-boss' : '') + (shielded ? ' shielded' : '');
     const tag = b.elite ? `<span class="boss-tag">ELITE · ARMOR ${Math.round(b.armor*100)}%${shielded ? ' · SHIELDED' : ''}</span>` : '';
     caveHud.innerHTML = '<div class="hearts">' + '♥'.repeat(Math.max(0, M.php)) + '<span>' + '♥'.repeat(Math.max(0, maxHp() - Math.max(0, M.php))) + '</span></div>' +
       (showBoss ? `<div class="boss-name${cls}">${b.legend ? '✦ ' : ''}${b.name}${tag}</div><div class="boss-bar${cls}"><div style="width:${Math.max(0, b.hp/b.max*100)}%"></div></div>` : '');
@@ -1347,6 +1491,25 @@ global.MoceanDungeons = function(ctx){
     const dot = (u, v, r, col, al)=> { const p = P(u, v); g.lineStyle(0); g.beginFill(col, al === undefined ? 1 : al); g.drawCircle(p[0], p[1], r); g.endFill(); };
     const eye = (u, v, r)=> { const p = P(u, v); line(Math.max(1.2, W*0.55), acc); g.drawCircle(p[0], p[1], r); dot(u + 0.03, v, Math.max(1.2, r*0.45), acc); };
 
+    const SKY_BOSS_KINDS = ['sky_crown','sky_archivist','sky_seraph','sky_solar','sky_frost','sky_wraith','sky_titan','sky_moon','sky_reaper','sky_maelstrom','sky_tempest','sky_prism','sky_null','sky_horizon','sky_lotan'];
+    if(SKY_BOSS_KINDS.includes(kind)){
+      const ix = SKY_BOSS_KINDS.indexOf(kind), pulse = 0.82 + 0.18*Math.sin(t*2.4), rot = t*(0.35 + ix*0.025);
+      line(W, body, 0.95); oval(0,0, ix===14 ? 1.15 : 0.86, ix===14 ? 0.88 : 0.7, 28);
+      line(W*0.7, acc, 0.9);
+      if(ix%3===0){
+        for(let k=0;k<8;k++){ const a=rot+k*Math.PI/4, r=1.0+(k%2)*0.55; path([P(Math.cos(a)*0.68,Math.sin(a)*0.55),P(Math.cos(a)*r,Math.sin(a)*r)]); dot(Math.cos(a)*r,Math.sin(a)*r,Math.max(1.8,S*0.045),acc,0.9); }
+        oval(0,0,1.25*pulse,1.25*pulse,32);
+      } else if(ix%3===1){
+        for(let k=0;k<5;k++){ const u=-0.85+k*0.42, bend=Math.sin(t*2+k)*0.18; path([P(u,-0.4),P(u+bend,-0.9),P(u+bend*1.5,-1.35),P(u+0.15,-1.65)]); path([P(u,0.4),P(u-bend,0.9),P(u-bend*1.5,1.35),P(u-0.15,1.65)]); }
+        for(let k=0;k<3;k++) dot(0.15+k*0.18,-0.12,Math.max(2,S*0.055),acc,0.95);
+      } else {
+        for(let k=0;k<4;k++){ const a=rot+k*Math.PI/2, r=1.15+0.12*Math.sin(t*3+k); path([P(Math.cos(a)*0.45,Math.sin(a)*0.45),P(Math.cos(a)*r,Math.sin(a)*r)]); }
+        const pts=[]; for(let k=0;k<10;k++){ const a=rot+k*Math.PI/5, r=k%2?0.72:1.18; pts.push(P(Math.cos(a)*r,Math.sin(a)*r)); } loop(pts);
+      }
+      line(W*0.8, acc, 0.95); eye(0.35,-0.12,Math.max(2.4,S*0.075)); eye(0.58,0.12,Math.max(1.8,S*0.05));
+      if(ix===14){ for(let k=0;k<6;k++){ const a=rot+k*Math.PI/3; path([P(-0.25,0),P(-0.7+Math.cos(a)*0.15,Math.sin(a)*1.25),P(-1.0,Math.sin(a)*1.45)]); } oval(0,0,1.55*pulse,1.28*pulse,36); }
+      g.lineStyle(0); return;
+    }
     switch(kind){
       case 'crab': {
         line(W, body); oval(0, 0, 0.9, 0.6);
@@ -1702,6 +1865,32 @@ global.MoceanDungeons = function(ctx){
       }
       entG.lineStyle(0);
     }
+    for(const h of M.hazards){
+      const phase=(h.tick||0), activeHazard=phase>95&&phase<155, warning=phase>60&&phase<=95;
+      const pulse=0.55+0.35*Math.sin(now*0.009+h.phase);
+      const hc=d.skyTheme ? d.skyTheme.hazardColor : d.accent, hr=h.r+(activeHazard?Math.sin(now*0.02)*5:0);
+      entG.lineStyle(activeHazard?4:2,hc,activeHazard?0.95:(warning?0.7:0.24));
+      if(h.kind===0){ entG.drawCircle(h.x,h.y,hr); entG.drawCircle(h.x,h.y,hr*0.58); }
+      else if(h.kind===1){ entG.moveTo(h.x,h.y-hr); entG.lineTo(h.x+hr,h.y); entG.lineTo(h.x,h.y+hr); entG.lineTo(h.x-hr,h.y); entG.lineTo(h.x,h.y-hr); }
+      else if(h.kind===2){ entG.moveTo(h.x-hr,h.y); entG.lineTo(h.x+hr,h.y); entG.moveTo(h.x,h.y-hr); entG.lineTo(h.x,h.y+hr); entG.drawCircle(h.x,h.y,hr*0.55); }
+      else if(h.kind===3){ entG.drawCircle(h.x,h.y,hr); entG.drawCircle(h.x+hr*0.25,h.y-hr*0.18,hr*0.52); }
+      else { for(let k=0;k<8;k++){const a=k*Math.PI/4+now*0.001;entG.moveTo(h.x+Math.cos(a)*hr*0.35,h.y+Math.sin(a)*hr*0.35);entG.lineTo(h.x+Math.cos(a)*hr,h.y+Math.sin(a)*hr);} }
+      entG.lineStyle(0);
+      if(activeHazard){ entG.beginFill(d.skyTheme.hazardColor,0.12); entG.drawCircle(h.x,h.y,h.r); entG.endFill(); }
+      else if(warning){ entG.beginFill(d.skyTheme.hazardColor,0.06*pulse); entG.drawCircle(h.x,h.y,h.r); entG.endFill(); }
+    }
+    if(M.treasure){
+      const tr=M.treasure, r=tr.room;
+      if(tr.active&&!tr.got){
+        const pulse=0.65+0.35*Math.sin(now*0.006);
+        entG.lineStyle(3,d.skyTheme.hazardColor,0.8); entG.drawCircle(tr.x,tr.y,22+pulse*5);
+        entG.lineStyle(0); entG.beginFill(0xffd36a,0.95); entG.drawRoundedRect(tr.x-14,tr.y-10,28,22,4); entG.endFill();
+        entG.lineStyle(3,0xffffff,0.9); entG.moveTo(tr.x-14,tr.y-2); entG.lineTo(tr.x+14,tr.y-2); entG.moveTo(tr.x,tr.y-10); entG.lineTo(tr.x,tr.y+12); entG.lineStyle(0);
+      } else if(!tr.got){
+        // A tiny glint at the sealed chest hints that the vault is worth returning to.
+        entG.lineStyle(2,d.skyTheme.hazardColor,0.25+0.15*Math.sin(now*0.003)); entG.drawCircle(tr.x,tr.y,9); entG.lineStyle(0);
+      }
+    }
     for(const e of M.guards) drawEnemy(e, now);
     if(!M.boss.dead) drawBoss(M.boss, now); else bossG.visible = false;
     for(const p of M.shots){
@@ -1743,6 +1932,7 @@ global.MoceanDungeons = function(ctx){
     };
     dot(M.start.x, M.start.y, '#9be8ff', c*0.5);
     if(M.orbOn) dot(M.orb.x, M.orb.y, '#ffffff', c*0.6);
+    if(M.treasure && M.treasure.active && !M.treasure.got) dot(M.treasure.x,M.treasure.y,'#ffd36a',c*0.65);
     if(M.boss.active && !M.boss.dead) dot(M.boss.x, M.boss.y, '#ff9d00', c*0.9);
     for(const e of M.guards) dot(e.x, e.y, '#ff4a4a', c*0.45);
     x.fillStyle = '#ffb36b'; x.beginPath(); x.arc(player.x/T*c, player.y/T*c, c*0.55, 0, Math.PI*2); x.fill();
@@ -1826,7 +2016,7 @@ global.MoceanDungeons = function(ctx){
     get _state(){ return M; },
     get menuOpen(){ return menuOpen; },
     resetUpgrades,
-    update, updatePlayer, handleKey, fire, look, speedMul, gravityMul, levelBonus, eatMul, depth, command, DUNGEONS
+    update, updatePlayer, handleKey, fire, look, speedMul, gravityMul, levelBonus, eatMul, depth, command, DUNGEONS, startLochNessEncounter
   };
 };
 
