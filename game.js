@@ -26,6 +26,64 @@ app.stage.addChild(world);
 world.addChild(terrainG);
 world.addChild(bubblesG);
 world.addChild(creaturesLayer);
+
+// Overworld boss landmark: the Loch Ness Monster, hidden until the player approaches its region.
+const lochNessG = new PIXI.Graphics();
+world.addChild(lochNessG);
+const lochNessLabel = new PIXI.Text('LOCH NESS MONSTER', {fontFamily:'Roboto Mono, monospace',fontSize:18,fill:0x9be8ff,stroke:0x07151e,strokeThickness:4,fontWeight:'bold',letterSpacing:2});
+lochNessLabel.anchor.set(0.5,1);
+world.addChild(lochNessLabel);
+const LOCH_NESS_X = 3200 + (20 - 1)*3400 + 1700;
+const LOCH_NESS_Y = 3600;
+let lochX = LOCH_NESS_X, lochY = LOCH_NESS_Y, lochFace = 1, lochVX = 0, lochVY = 0;
+const LOCH_AGGRO = 3200, LOCH_SPEED = 4.6;      // player max speed is 9, so you can always outswim it
+function updateLochNess(dt){
+  if(lochNessEncounterStarted || lochNessDefeatedThisRun || (typeof dungeons !== 'undefined' && dungeons.active)) return;
+  const dx = player.x - lochX, dy = player.y - lochY, dist = Math.hypot(dx, dy);
+  let tx = 0, ty = 0;
+  if(dist < LOCH_AGGRO && dist > 1 && player.y > 120){          // hunts you while you're in the sea
+    tx = dx/dist*LOCH_SPEED; ty = dy/dist*LOCH_SPEED;
+  } else {                                                        // lost you: drift back home
+    const hx = LOCH_NESS_X - lochX, hy = LOCH_NESS_Y - lochY, hd = Math.hypot(hx, hy);
+    if(hd > 40){ tx = hx/hd*LOCH_SPEED*0.5; ty = hy/hd*LOCH_SPEED*0.5; }
+  }
+  const k = 1 - Math.pow(0.96, dt);                               // smooth acceleration
+  lochVX += (tx - lochVX)*k; lochVY += (ty - lochVY)*k;
+  lochX += lochVX*dt; lochY += lochVY*dt;
+  lochY = Math.max(260, Math.min(floorY(lochX) - 220, lochY));    // stay in open water
+  if(Math.abs(lochVX) > 0.4) lochFace += ((lochVX > 0 ? 1 : -1) - lochFace)*Math.min(1, 0.08*dt);
+}
+let lochNessEncounterStarted = false;
+let lochNessDefeatedThisRun = false;
+let lochNessCd = 0;
+function drawLochNess(now){
+  lochNessG.clear();
+  if(typeof dungeons !== 'undefined' && dungeons.active){ lochNessG.visible=false; lochNessLabel.visible=false; return; }
+  const dx=player.x-lochX, dy=player.y-lochY, dist=Math.hypot(dx,dy);
+  const visible=(dist<3200 || lochNessEncounterStarted) && !lochNessDefeatedThisRun;
+  lochNessG.visible=visible; lochNessLabel.visible=visible && !lochNessEncounterStarted;
+  if(!visible) return;
+  const bob=Math.sin(now*0.0018)*18, pulse=0.45+0.25*Math.sin(now*0.003);
+  const g=lochNessG, f=lochFace;
+  g.x=lochX; g.y=lochY+bob; g.scale.x=f;           // drawn around its own origin, so it can swim and turn
+  const x=0, y=0;
+  // Long serpentine body and three humps, then a raised neck and small horned head.
+  g.lineStyle(22,0x164b5b,0.95);
+  g.moveTo(x-300,y+45);
+  g.bezierCurveTo(x-230,y-45,x-160,y+75,x-85,y+15);
+  g.bezierCurveTo(x-15,y-35,x+35,y+55,x+90,y+12);
+  g.bezierCurveTo(x+125,y-5,x+130,y-105,x+145,y-165);
+  g.lineStyle(10,0x55cbd5,0.9);
+  g.moveTo(x-300,y+45); g.bezierCurveTo(x-230,y-45,x-160,y+75,x-85,y+15);
+  g.bezierCurveTo(x-15,y-35,x+35,y+55,x+90,y+12);
+  g.bezierCurveTo(x+125,y-5,x+130,y-105,x+145,y-165);
+  g.lineStyle(0); g.beginFill(0x2a8f9e,0.98); g.drawEllipse(x+152,y-180,39,25); g.endFill();
+  g.beginFill(0x9be8ff,0.95); g.drawCircle(x+165,y-187,5); g.endFill();
+  g.beginFill(0x0b2b38,0.95); g.drawCircle(x+166,y-187,2.2); g.endFill();
+  g.lineStyle(3,0x9be8ff,pulse); g.drawEllipse(x+30,y+8,390,120);
+  g.lineStyle(2,0x9be8ff,pulse*0.55); g.drawEllipse(x+30,y+8,440,145);
+  lochNessLabel.x=lochX+30*f; lochNessLabel.y=lochY+bob-235;
+}
 world.addChild(surfaceG);
 world.addChild(splashG);
 app.stage.addChild(waterOverlayG);
@@ -915,7 +973,7 @@ const Fish = MoceanFish({
   get options(){ return options; }
 });
 const {
-  drawFishShape, SHARK_COLORS, schools, spawnSchool, updateSchool, destroySchool, spawnJellyfish, updateJelly, spawnCrab, updateCrab, spawnTurtle, updateTurtle, spawnShark, updateShark, spawnOctopus, updateOctopus, spawnSeahorse, updateSeahorse, spawnStingray, updateStingray, spawnEel, updateEel, spawnStarfish, updateStarfish, spawnSeaUrchin, updateSeaUrchin, spawnPufferfish, updatePufferfish, spawnMantaRay, updateMantaRay, spawnSquid, updateSquid, spawnAnglerfish, updateAnglerfish, spawnNarwhal, updateNarwhal, spawnHammerhead, updateHammerhead, spawnIsopod, updateIsopod, spawnLionfish, updateLionfish, spawnCuttlefish, updateCuttlefish, spawnParrotfish, updateParrotfish, spawnBlobfish, updateBlobfish, spawnSeaDragon, updateSeaDragon, spawnWhale, updateWhale, spawnDolphin, updateDolphin, spawnSwordfish, updateSwordfish, spawnNautilus, updateNautilus, spawnSeaSnake, updateSeaSnake, spawnSunfish, updateSunfish, spawnDumboOctopus, updateDumboOctopus, spawnGoblinShark, updateGoblinShark, spawnOarfish, updateOarfish, spawnManatee, updateManatee
+  drawFishShape, SHARK_COLORS, schools, spawnSchool, updateSchool, destroySchool, spawnJellyfish, updateJelly, spawnCrab, updateCrab, spawnTurtle, updateTurtle, spawnShark, updateShark, spawnOctopus, updateOctopus, spawnSeahorse, updateSeahorse, spawnStingray, updateStingray, spawnEel, updateEel, spawnStarfish, updateStarfish, spawnSeaUrchin, updateSeaUrchin, spawnPufferfish, updatePufferfish, spawnMantaRay, updateMantaRay, spawnSquid, updateSquid, spawnAnglerfish, updateAnglerfish, spawnNarwhal, updateNarwhal, spawnHammerhead, updateHammerhead, spawnIsopod, updateIsopod, spawnLionfish, updateLionfish, spawnCuttlefish, updateCuttlefish, spawnParrotfish, updateParrotfish, spawnBlobfish, updateBlobfish, spawnSeaDragon, updateSeaDragon, spawnWhale, updateWhale, spawnDolphin, updateDolphin, spawnSwordfish, updateSwordfish, spawnNautilus, updateNautilus, spawnSeaSnake, updateSeaSnake, spawnSunfish, updateSunfish, spawnDumboOctopus, updateDumboOctopus, spawnGoblinShark, updateGoblinShark, spawnOarfish, updateOarfish, spawnManatee, updateManatee, spawnPrismKoi, updatePrismKoi, spawnCloudray, updateCloudray, spawnStarwhale, updateStarwhale
 } = Fish;
 
 /* ============================= NPC MANAGER ============================= */
@@ -948,7 +1006,10 @@ function trySpawn(dt){
   let y = clamp(player.y + Math.sin(angle)*d, WORLD_TOP_MARGIN+40, 7500);
 
   const r = Math.random();
-  if(r < 0.18 && schools.length < MAX_SCHOOLS){
+  if(player.y <= INV_SURFACE_Y && r < 0.045){ npcs.push(spawnPrismKoi(x, clamp(y, INV_SURFACE_Y-1400, INV_SURFACE_Y-80))); }
+  else if(player.y <= INV_SURFACE_Y && r < 0.075){ npcs.push(spawnCloudray(x, clamp(y, INV_SURFACE_Y-1400, INV_SURFACE_Y-80))); }
+  else if(player.y <= INV_SURFACE_Y && r < 0.09){ npcs.push(spawnStarwhale(x, clamp(y, INV_SURFACE_Y-1400, INV_SURFACE_Y-80))); }
+  else if(r < 0.18 && schools.length < MAX_SCHOOLS){
     spawnSchool(x,y);
   } else if(r < 0.24){
     npcs.push(spawnJellyfish(x, clamp(y, WORLD_TOP_MARGIN+60, 7000)));
@@ -1057,6 +1118,9 @@ function updateNPCs(dt){
     else if(n.type==='seadragon') updateSeaDragon(n, dt);
     else if(n.type==='oarfish') updateOarfish(n, dt);
     else if(n.type==='manatee') updateManatee(n, dt);
+    else if(n.type==='prismkoi') updatePrismKoi(n, dt);
+    else if(n.type==='cloudray') updateCloudray(n, dt);
+    else if(n.type==='starwhale') updateStarwhale(n, dt);
     else if(n.type==='whale') updateWhale(n, dt);
     else if(n.type==='dolphin') updateDolphin(n, dt);
     else if(n.type==='swordfish') updateSwordfish(n, dt);
@@ -1089,8 +1153,10 @@ function drawSeafloorAndDecor(time){
   terrainG.clear();
 
   // cover exactly what the camera sees (incl. look-ahead offset), plus margin, all the way to the screen bottom
-  const left = -world.x - 100;
-  const right = -world.x + app.screen.width + 100;
+  // snapped to a fixed 24px grid (STRIP) so strip seams, ripples and the crest line stay put in world space
+  // instead of crawling along with the camera (that crawl is what showed up as flickering vertical lines)
+  const left = Math.floor((-world.x - 100)/24)*24;
+  const right = Math.ceil((-world.x + app.screen.width + 100)/24)*24;
   const bottom = -world.y + app.screen.height + 200;
   const cellSize = 70;
   const firstCell = Math.floor(left/cellSize) - 1;
@@ -1104,7 +1170,7 @@ function drawSeafloorAndDecor(time){
     for(let wx = left; wx < right; wx += STRIP){
       const x2 = wx + STRIP;
       terrainG.beginFill(Bio.bandColor(wx + STRIP/2, bi));
-      terrainG.drawPolygon([wx, bandEdge(wx, off), x2 + 1, bandEdge(x2, off), x2 + 1, bottom, wx, bottom]);
+      terrainG.drawPolygon([wx - 1, bandEdge(wx - 1, off), x2 + 1.5, bandEdge(x2 + 1.5, off), x2 + 1.5, bottom, wx - 1, bottom]);
       terrainG.endFill();
     }
   });
@@ -1404,7 +1470,30 @@ function playLevelUp(){
 function setVolume(v){
   options.volume = clamp(v, 0, 1);
   if(masterGain) masterGain.gain.value = options.volume * 0.5;
+  if(lotanMusicAudio) lotanMusicAudio.volume = options.volume;
 }
+
+// CODE-ONLY music setting for Dungeon 35.
+// To replace the track, edit this URL in game.js to a direct MP3/OGG/WAV URL
+// (or a local path such as "assets/lotan-final-boss.mp3"). No in-game setting is exposed.
+const LOTAN_BOSS_MUSIC_URL = '';
+let lotanMusicAudio = null;
+function stopLotanMusic(){
+  if(lotanMusicAudio){ lotanMusicAudio.pause(); lotanMusicAudio.currentTime=0; lotanMusicAudio=null; }
+}
+function startLotanMusic(){
+  stopLotanMusic();
+  if(!LOTAN_BOSS_MUSIC_URL) return;
+  try{
+    lotanMusicAudio = new Audio(LOTAN_BOSS_MUSIC_URL);
+    lotanMusicAudio.loop = true;
+    lotanMusicAudio.volume = options.volume;
+    const playPromise = lotanMusicAudio.play();
+    if(playPromise && playPromise.catch) playPromise.catch(()=>{});
+  }catch(err){ lotanMusicAudio=null; }
+}
+window.MoceanFinalMusicStart = startLotanMusic;
+window.MoceanFinalMusicStop = stopLotanMusic;
 
 /* ============================= TITLE SCREEN / OPTIONS WIRING ============================= */
 
@@ -1887,7 +1976,27 @@ app.ticker.add((rawDt)=>{
     if(player.y > -1200) trySpawn(dt);       // no sea creatures spawn while you're high in the sky
     checkEating();
   }
+  if(lochNessCd > 0) lochNessCd -= dt;
+  updateLochNess(dt);
+  if(!dungeons.active && !lochNessEncounterStarted && !lochNessDefeatedThisRun && lochNessCd <= 0){
+    // trigger when the fish touches the monster's drawn body (the glowing ellipse), not just a small circle at its centre
+    const ex=(player.x-(lochX+30*lochFace))/390, ey=(player.y-(lochY+8))/120;
+    if(ex*ex+ey*ey < 1 && gameStarted){
+      lochNessEncounterStarted = true;
+      // come back out just outside the monster, on the side the player arrived from
+      const side = player.x < lochX ? -1 : 1;
+      const ret = { x: lochX + 30*lochFace + side*700, y: lochY };
+      if(dungeons.startLochNessEncounter(ret)) lochNessG.visible = false;
+      else lochNessEncounterStarted = false;
+    }
+  }
+  drawLochNess(performance.now());
   dungeons.update(dt);
+  if(!dungeons.active && lochNessEncounterStarted){
+    lochNessEncounterStarted=false;
+    lochNessCd = 300;                       // ~5 s grace so you can't be instantly re-grabbed
+    if(window.MoceanLochNessDefeated) lochNessDefeatedThisRun=true;
+  }
 
   bubbleSpawnTimer -= dt;
   if(bubbleSpawnTimer <= 0){
