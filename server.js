@@ -27,6 +27,11 @@ const MAX_PLAYERS = +process.env.MAX_PLAYERS || 100;
 const MAX_PER_IP = +process.env.MAX_PER_IP || 6;
 const TRUST_PROXY = process.env.TRUST_PROXY === '1';
 const ROOT = __dirname;
+// The name "iamdev" unlocks dev commands in the client, so it is reserved: only a player who sends the
+// DEV_KEY (set it as an environment variable; they enter it in game with /devkey) may use it.
+// If DEV_KEY is not set, nobody can use the name on this server.
+const DEV_KEY = process.env.DEV_KEY || '';
+const nameOk = (n, key)=> n.toLowerCase().replace(/[^a-z0-9]/g, '') !== 'iamdev' || (DEV_KEY !== '' && key === DEV_KEY);
 
 const MIME = {
   '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8',
@@ -98,7 +103,7 @@ wss.on('connection', (ws, req)=>{
   if((perIp.get(ip) || 0) >= MAX_PER_IP){ send(ws, { t:'err', text:'Too many connections from your address.' }); return ws.close(1008); }
   perIp.set(ip, (perIp.get(ip) || 0) + 1);
 
-  const p = { id: nextId++, ws, ip, name:'', joined:false, s:null, dirty:false, lastS:0, chatTimes:[], lastName:0 };
+  const p = { id: nextId++, ws, ip, name:'', joined:false, s:null, dirty:false, lastS:0, chatTimes:[], lastName:0, lastPing:0 };
   ws.alive = true;
   ws.on('pong', ()=>{ ws.alive = true; });
   setTimeout(()=>{ if(!p.joined) ws.terminate(); }, 10000);
@@ -108,15 +113,23 @@ wss.on('connection', (ws, req)=>{
     if(!m || typeof m.t !== 'string') return;
     const now = Date.now();
 
+    if(m.t === 'ping'){                                // lets the game show your latency
+      if(now - p.lastPing > 400){ p.lastPing = now; send(ws, { t:'pong', ts: typeof m.ts === 'number' ? m.ts : 0 }); }
+      return;
+    }
+
     if(m.t === 'join'){
       if(p.joined) return;
       if(players.size >= MAX_PLAYERS){ send(ws, { t:'err', text:'The server is full.' }); return ws.close(1013); }
       p.name = cleanName(m.name) || ('Fish' + p.id);
+      const denied = !nameOk(p.name, m.key);
+      if(denied) p.name = 'Fish' + p.id;
       p.joined = true;
       players.set(p.id, p);
       send(ws, { t:'welcome', id:p.id, name:p.name, n:players.size,
                  players: Array.from(players.values()).filter(o => o !== p).map(o => ({ id:o.id, name:o.name, s:o.s })) });
       broadcast({ t:'join', p:{ id:p.id, name:p.name }, n:players.size }, p.id);
+      if(denied) send(ws, { t:'sys', text:'That name is reserved, so you were renamed ' + p.name + '. Pick another with /name.' });
       return;
     }
     if(!p.joined) return;
@@ -137,6 +150,10 @@ wss.on('connection', (ws, req)=>{
     } else if(m.t === 'name'){
       const n = cleanName(m.name);
       if(!n || n === p.name || now - p.lastName < 2000) return;
+      if(!nameOk(n, m.key)){
+        send(ws, { t:'sys', text:'That name is reserved.' });
+        return send(ws, { t:'name', id:p.id, name:p.name });      // tell the client to keep its old name
+      }
       p.lastName = now; p.name = n;
       broadcast({ t:'name', id:p.id, name:n }, p.id);
     }
