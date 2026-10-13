@@ -1,196 +1,2121 @@
-#!/usr/bin/env node
-/* =============================================================================
-   server.js — the mocean multiplayer server.
-
-     npm install
-     npm start                 (http://localhost:3000)
-
-   • serves the game files in this folder (so you can just open http://localhost:3000)
-   • GET  /online      -> { "online": 3, "max": 100 }   (the title screen reads this)
-   • WS   /            -> the game connects here after you press Play
-
-   It only relays players' positions and chat; it knows nothing about creatures, XP or caves.
-
-   Environment: PORT (3000), HOST (0.0.0.0), MAX_PLAYERS (100), MAX_PER_IP (6), TRUST_PROXY=1
-   (use the X-Forwarded-For header for per-IP limits when running behind nginx / a platform proxy).
-   ============================================================================= */
+(function(){
 "use strict";
 
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const { WebSocketServer } = require('ws');
+/* ============================= PIXI SETUP ============================= */
 
-const PORT = +process.env.PORT || 3000;
-const HOST = process.env.HOST || '0.0.0.0';
-const MAX_PLAYERS = +process.env.MAX_PLAYERS || 100;
-const MAX_PER_IP = +process.env.MAX_PER_IP || 6;
-const TRUST_PROXY = process.env.TRUST_PROXY === '1';
-const ROOT = __dirname;
-// The name "iamdev" unlocks dev commands in the client, so it is reserved: only a player who sends the
-// DEV_KEY (set it as an environment variable; they enter it in game with /devkey) may use it.
-// If DEV_KEY is not set, nobody can use the name on this server.
-const DEV_KEY = process.env.DEV_KEY || '';
-const nameOk = (n, key)=> n.toLowerCase().replace(/[^a-z0-9]/g, '') !== 'iamdev' || (DEV_KEY !== '' && key === DEV_KEY);
+const app = new PIXI.Application({
+  resizeTo: window,
+  backgroundAlpha: 0,
+  antialias: true,
+  autoDensity: true,
+  resolution: Math.min(window.devicePixelRatio || 1, 2)
+});
+document.getElementById('pixi-root').appendChild(app.view);
 
-const MIME = {
-  '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8',
-  '.json':'application/json', '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif',
-  '.webp':'image/webp', '.svg':'image/svg+xml', '.ico':'image/x-icon', '.mp3':'audio/mpeg', '.ogg':'audio/ogg',
-  '.wav':'audio/wav', '.woff2':'font/woff2'
+const skyG = new PIXI.Graphics();
+const world = new PIXI.Container();
+const terrainG = new PIXI.Graphics();
+const surfaceG = new PIXI.Graphics();
+const bubblesG = new PIXI.Graphics();
+const splashG = new PIXI.Graphics();
+const creaturesLayer = new PIXI.Container();
+const waterOverlayG = new PIXI.Graphics();
+
+app.stage.addChild(skyG);
+app.stage.addChild(world);
+world.addChild(terrainG);
+world.addChild(bubblesG);
+world.addChild(creaturesLayer);
+
+// Overworld boss landmark: the Loch Ness Monster, hidden until the player approaches its region.
+const lochNessG = new PIXI.Graphics();
+world.addChild(lochNessG);
+const lochNessLabel = new PIXI.Text('LOCH NESS MONSTER', {fontFamily:'Roboto Mono, monospace',fontSize:18,fill:0x9be8ff,stroke:0x07151e,strokeThickness:4,fontWeight:'bold',letterSpacing:2});
+lochNessLabel.anchor.set(0.5,1);
+world.addChild(lochNessLabel);
+const LOCH_NESS_X = 3200 + (20 - 1)*3400 + 1700;
+const LOCH_NESS_Y = 3600;
+let lochX = LOCH_NESS_X, lochY = LOCH_NESS_Y, lochFace = 1, lochVX = 0, lochVY = 0;
+const LOCH_AGGRO = 3200, LOCH_SPEED = 4.6;      // player max speed is 9, so you can always outswim it
+function updateLochNess(dt){
+  if(lochNessEncounterStarted || lochNessDefeatedThisRun || (typeof dungeons !== 'undefined' && dungeons.active)) return;
+  const dx = player.x - lochX, dy = player.y - lochY, dist = Math.hypot(dx, dy);
+  let tx = 0, ty = 0;
+  if(dist < LOCH_AGGRO && dist > 1 && player.y > 120){          // hunts you while you're in the sea
+    tx = dx/dist*LOCH_SPEED; ty = dy/dist*LOCH_SPEED;
+  } else {                                                        // lost you: drift back home
+    const hx = LOCH_NESS_X - lochX, hy = LOCH_NESS_Y - lochY, hd = Math.hypot(hx, hy);
+    if(hd > 40){ tx = hx/hd*LOCH_SPEED*0.5; ty = hy/hd*LOCH_SPEED*0.5; }
+  }
+  const k = 1 - Math.pow(0.96, dt);                               // smooth acceleration
+  lochVX += (tx - lochVX)*k; lochVY += (ty - lochVY)*k;
+  lochX += lochVX*dt; lochY += lochVY*dt;
+  lochY = Math.max(260, Math.min(floorY(lochX) - 220, lochY));    // stay in open water
+  if(Math.abs(lochVX) > 0.4) lochFace += ((lochVX > 0 ? 1 : -1) - lochFace)*Math.min(1, 0.08*dt);
+}
+let lochNessEncounterStarted = false;
+let lochNessDefeatedThisRun = false;
+let lochNessCd = 0;
+function drawLochNess(now){
+  lochNessG.clear();
+  if(typeof dungeons !== 'undefined' && dungeons.active){ lochNessG.visible=false; lochNessLabel.visible=false; return; }
+  const dx=player.x-lochX, dy=player.y-lochY, dist=Math.hypot(dx,dy);
+  const visible=(dist<3200 || lochNessEncounterStarted) && !lochNessDefeatedThisRun;
+  lochNessG.visible=visible; lochNessLabel.visible=visible && !lochNessEncounterStarted;
+  if(!visible) return;
+  const bob=Math.sin(now*0.0018)*18, pulse=0.45+0.25*Math.sin(now*0.003);
+  const g=lochNessG, f=lochFace;
+  g.x=lochX; g.y=lochY+bob; g.scale.x=f;           // drawn around its own origin, so it can swim and turn
+  const x=0, y=0;
+  // Long serpentine body and three humps, then a raised neck and small horned head.
+  g.lineStyle(22,0x164b5b,0.95);
+  g.moveTo(x-300,y+45);
+  g.bezierCurveTo(x-230,y-45,x-160,y+75,x-85,y+15);
+  g.bezierCurveTo(x-15,y-35,x+35,y+55,x+90,y+12);
+  g.bezierCurveTo(x+125,y-5,x+130,y-105,x+145,y-165);
+  g.lineStyle(10,0x55cbd5,0.9);
+  g.moveTo(x-300,y+45); g.bezierCurveTo(x-230,y-45,x-160,y+75,x-85,y+15);
+  g.bezierCurveTo(x-15,y-35,x+35,y+55,x+90,y+12);
+  g.bezierCurveTo(x+125,y-5,x+130,y-105,x+145,y-165);
+  g.lineStyle(0); g.beginFill(0x2a8f9e,0.98); g.drawEllipse(x+152,y-180,39,25); g.endFill();
+  g.beginFill(0x9be8ff,0.95); g.drawCircle(x+165,y-187,5); g.endFill();
+  g.beginFill(0x0b2b38,0.95); g.drawCircle(x+166,y-187,2.2); g.endFill();
+  g.lineStyle(3,0x9be8ff,pulse); g.drawEllipse(x+30,y+8,390,120);
+  g.lineStyle(2,0x9be8ff,pulse*0.55); g.drawEllipse(x+30,y+8,440,145);
+  lochNessLabel.x=lochX+30*f; lochNessLabel.y=lochY+bob-235;
+}
+world.addChild(surfaceG);
+world.addChild(splashG);
+app.stage.addChild(waterOverlayG);
+
+const playerG = new PIXI.Graphics();
+app.stage.addChild(playerG);
+app.stage.eventMode = 'static';
+
+/* ============================= HELPERS ============================= */
+
+function rand(a,b){ return a + Math.random()*(b-a); }
+function randi(a,b){ return Math.floor(rand(a,b+1)); }
+function clamp(v,a,b){ return Math.max(a, Math.min(b,v)); }
+function dist2(ax,ay,bx,by){ const dx=ax-bx, dy=ay-by; return dx*dx+dy*dy; }
+function lerp(a,b,t){ return a + (b-a)*t; }
+function lerpAngle(a,b,t){
+  let diff = ((b - a + Math.PI) % (Math.PI*2)) - Math.PI;
+  if (diff < -Math.PI) diff += Math.PI*2;
+  return a + diff*t;
+}
+function hash(n){
+  const x = Math.sin(n*127.1)*43758.5453123;
+  return x - Math.floor(x);
+}
+function lerpColor(c1,c2,t){
+  return [
+    Math.round(lerp(c1[0],c2[0],t)),
+    Math.round(lerp(c1[1],c2[1],t)),
+    Math.round(lerp(c1[2],c2[2],t))
+  ];
+}
+function rgbToHex(c){ return (c[0]<<16) + (c[1]<<8) + c[2]; }
+function rgbToCss(c){ return `rgb(${c[0]},${c[1]},${c[2]})`; }
+
+const ROUND = { cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND };
+const Bio = MoceanBiomes;      // sea biomes (see biomes.js)
+
+/* ============================= WORLD ============================= */
+
+const SURFACE_Y = 0;
+const WORLD_TOP_MARGIN = 40;
+const AIR_HEIGHT = 600;
+const SkyC = MoceanSky.C;                         // altitude map of the sky + upturned sea (see sky.js)
+const INV_SURFACE_Y = SkyC.INV_SURFACE_Y;       // surface of the upside-down sea, far above the waves
+const SPACE_Y = SkyC.SPACE_Y;                    // top of the upturned sea's rock crust: deep space begins above it
+// the upturned sea's rocky ceiling mirrors the real seafloor's shape
+const invFloorY = (x)=> SkyC.INV_FLOOR_Y - (floorY(x) - 8000);
+// wet = inside the real sea (below y=0) or inside the upturned sea (above its surface)
+// (the shafts through the rock crust, the star rifts, are water-filled too; above the crust is space)
+function isWet(y){ return y >= SURFACE_Y || (y <= INV_SURFACE_Y && y > SPACE_Y); }
+function waterDepthPx(){ return !isWet(player.y) ? 0 : (player.y >= SURFACE_Y ? player.y : INV_SURFACE_Y - player.y); }
+const GRAVITY = 0.15;
+const FLIP_SPEED_THRESHOLD = 0.8;
+
+const CYCLE_DURATION = 120000;
+const CLOCK_START = 9/24;   // the game begins at 09:00
+// 0..1 through the day, 0 = midnight, 0.5 = noon
+function getCycleTime(now){
+  return ((now + CYCLE_DURATION*CLOCK_START) % CYCLE_DURATION) / CYCLE_DURATION;
+}
+// 0 = dead of night, 1 = high noon
+function getDaylight(now){
+  return 0.5 - 0.5*Math.cos(getCycleTime(now)*Math.PI*2);
+}
+
+function floorY(x){
+  return 8000
+    + Math.sin(x*0.008)*40
+    + Math.sin(x*0.021+3)*22
+    + Math.sin(x*0.05+7)*9;
+}
+
+// Water is always noticeably darker than the sky above it, and gets darker quickly with depth
+const DEPTH_STOPS = [
+  {stop:0.00, color:[30,120,168]},
+  {stop:0.06, color:[22,98,146]},
+  {stop:0.15, color:[14,70,116]},
+  {stop:0.32, color:[9,46,84]},
+  {stop:0.55, color:[5,28,56]},
+  {stop:0.80, color:[3,14,32]},
+  {stop:1.00, color:[1,6,14]}
+];
+
+const SKY_DAY_TOP    = [82,168,232];
+const SKY_DAY_HOR    = [176,226,247];
+const SKY_DUSK_TOP   = [62,70,140];
+const SKY_DUSK_HOR   = [250,160,120];
+const SKY_NIGHT_TOP  = [4,8,24];
+const SKY_NIGHT_HOR  = [30,42,82];
+const SKY_HEIGHT     = 1400;
+function colorAtDepthFraction(f){
+  f = clamp(f,0,1);
+  for(let i=0;i<DEPTH_STOPS.length-1;i++){
+    const a = DEPTH_STOPS[i], b = DEPTH_STOPS[i+1];
+    if(f>=a.stop && f<=b.stop){
+      const t = (f-a.stop)/(b.stop-a.stop || 1);
+      return lerpColor(a.color,b.color,t);
+    }
+  }
+  return DEPTH_STOPS[DEPTH_STOPS.length-1].color;
+}
+
+/* ============================= DEBUG MODE ============================= */
+
+let debugMode = false;
+const debugDisplay = document.createElement('div');
+debugDisplay.id = 'debug-display';
+debugDisplay.style.cssText = `
+  position: fixed;
+  top: 190px;
+  left: 14px;
+  background: rgba(0,0,0,0.85);
+  color: #0f0;
+  font-family: 'Roboto Mono', monospace;
+  font-size: 12px;
+  padding: 12px;
+  border: 1px solid #0f0;
+  border-radius: 4px;
+  pointer-events: none;
+  user-select: none;
+  z-index: 100;
+  line-height: 1.6;
+  display: none;
+`;
+document.body.appendChild(debugDisplay);
+
+window.addEventListener('keydown', (e)=>{
+  if(e.key === 'Tab' && gameStarted && !commandOpen){
+    e.preventDefault();
+    debugMode = !debugMode;
+    debugDisplay.style.display = debugMode ? 'block' : 'none';
+  }
+});
+
+function updateDebugDisplay(){
+  if(!debugMode) return;
+  const cycleTime = getCycleTime(performance.now());
+  const brightness = getDaylight(performance.now());
+  const timeOfDay = brightness >= 0.5 ? 'DAY' : 'NIGHT';
+  debugDisplay.innerHTML = `
+    X: ${Math.round(player.x)}<br>
+    Y: ${Math.round(player.y)}<br>
+    VX: ${player.vx.toFixed(2)}<br>
+    VY: ${player.vy.toFixed(2)}<br>
+    FPS: ${Math.round(app.ticker.FPS)}<br>
+    Ping: ${mp.ping === null ? '--' : mp.ping + ' ms'}<br>
+    Depth: ${Math.max(0, Math.round((player.y - SURFACE_Y)/8))}m<br>
+    <br>
+    Time: ${timeOfDay}<br>
+    Cycle: ${(cycleTime*100).toFixed(1)}%<br>
+    Daylight: ${(brightness*100).toFixed(1)}%<br>
+    <br>
+    Level: ${progress.level}<br>
+    XP: ${progress.xp} / ${xpNeeded(progress.level)}
+  `;
+}
+
+/* ============================= GAME / UI STATE ============================= */
+
+let gameStarted = false;
+let commandOpen = false;
+
+/* ============================= INPUT ============================= */
+
+const keys = { up:false, down:false, left:false, right:false, space:false };
+
+const instructionsEl = document.getElementById('instructions');
+function hideInstructions(){ instructionsEl.classList.add('hide'); }
+// After the first input, keep the hint up a little longer so it can actually be read
+let hintHideTimer = null;
+function scheduleHideInstructions(ms){
+  if(hintHideTimer) return;
+  hintHideTimer = setTimeout(hideInstructions, ms);
+}
+
+window.addEventListener('keydown', (e)=>{
+  if(commandOpen) return;
+  if(gameStarted && (e.key === '/' || e.key === 'Enter')){
+    e.preventDefault();
+    if(!e.repeat) openCommandPrompt(e.key === '/' ? '/' : '');   // "/" starts a command, Enter starts a chat message
+    return;
+  }
+  if(!gameStarted) return;
+  if(dungeons.handleKey(e)){ e.preventDefault(); return; }
+  switch(e.key){
+    case 'ArrowUp': keys.up=true; e.preventDefault(); break;
+    case 'ArrowDown': keys.down=true; e.preventDefault(); break;
+    case 'ArrowLeft': keys.left=true; e.preventDefault(); break;
+    case 'ArrowRight': keys.right=true; e.preventDefault(); break;
+    case ' ': keys.space=true; if(!e.repeat) tryJump(); e.preventDefault(); break;
+  }
+  scheduleHideInstructions(8000);
+}, {passive:false});
+
+window.addEventListener('keyup', (e)=>{
+  if(commandOpen || !gameStarted) return;
+  switch(e.key){
+    case 'ArrowUp': keys.up=false; break;
+    case 'ArrowDown': keys.down=false; break;
+    case 'ArrowLeft': keys.left=false; break;
+    case 'ArrowRight': keys.right=false; break;
+    case ' ': keys.space=false; break;
+  }
+});
+
+/* ============================= HOLD-TO-SWIM TOUCH CONTROLS ============================= */
+
+// Touch and hold anywhere: the fish swims toward your finger (relative to where the fish is on screen).
+const touchArea = document.getElementById('touch-area');
+const touchHintEl = document.querySelector('.touch-hint');
+let touchActive = false;
+let touchId = null;
+let touchCurrentX = 0, touchCurrentY = 0;
+let touchKnob = null;
+
+function createTouchKnob(){
+  const knob = document.createElement('div');
+  knob.className = 'touch-knob';
+  document.body.appendChild(knob);
+  return knob;
+}
+
+function updateTouchKnob(){
+  if(!touchKnob) touchKnob = createTouchKnob();
+  if(touchActive){
+    touchKnob.style.left = touchCurrentX + 'px';
+    touchKnob.style.top = touchCurrentY + 'px';
+    touchKnob.style.opacity = '1';
+  } else {
+    touchKnob.style.opacity = '0';
+  }
+}
+
+function findTouch(list){
+  for(let i=0;i<list.length;i++) if(list[i].identifier === touchId) return list[i];
+  return null;
+}
+
+function handleTouchStart(e){
+  if(!gameStarted) return;
+  e.preventDefault();
+  if(touchActive) return;                       // one steering finger at a time
+  const touch = e.changedTouches[0];
+  touchActive = true;
+  touchId = touch.identifier;
+  touchCurrentX = touch.clientX;
+  touchCurrentY = touch.clientY;
+  if(touchHintEl) touchHintEl.style.opacity = '0';
+  scheduleHideInstructions(8000);
+  updateTouchKnob();
+}
+
+function handleTouchMove(e){
+  if(!touchActive) return;
+  e.preventDefault();
+  const touch = findTouch(e.changedTouches);
+  if(!touch) return;
+  touchCurrentX = touch.clientX;
+  touchCurrentY = touch.clientY;
+  updateTouchKnob();
+}
+
+function handleTouchEnd(e){
+  if(!touchActive) return;
+  if(!findTouch(e.changedTouches)) return;
+  touchActive = false;
+  touchId = null;
+  keys.left = keys.right = keys.up = keys.down = false;
+  updateTouchKnob();
+}
+
+const jumpButtonEl = document.getElementById('jump-button');
+if(jumpButtonEl){
+  // holding the button keeps "space" down: auto-fires bubbles in caves, glides with Sea Wings
+  const releaseJump = ()=>{ keys.space = false; };
+  jumpButtonEl.addEventListener('pointerdown', (e)=>{ e.preventDefault(); keys.space = true; tryJump(); });
+  jumpButtonEl.addEventListener('pointerup', releaseJump);
+  jumpButtonEl.addEventListener('pointercancel', releaseJump);
+  jumpButtonEl.addEventListener('pointerleave', releaseJump);
+}
+
+touchArea.addEventListener('touchstart', handleTouchStart, {passive:false});
+touchArea.addEventListener('touchmove', handleTouchMove, {passive:false});
+touchArea.addEventListener('touchend', handleTouchEnd, {passive:false});
+touchArea.addEventListener('touchcancel', handleTouchEnd, {passive:false});
+
+function updateTouchInput(){
+  if(!touchActive) return;
+  // direction from the fish (where it is drawn on screen) to the finger; re-read every frame so it keeps up as you move
+  const fx = app.screen.width/2 + view.ox, fy = app.screen.height/2 + player.bob + view.oy;
+  const dx = touchCurrentX - fx, dy = touchCurrentY - fy;
+  const len = Math.hypot(dx, dy);
+  if(len < 18){ keys.left = keys.right = keys.up = keys.down = false; return; }   // finger right on the fish: coast
+  const nx = dx/len, ny = dy/len, t = 0.38;
+  keys.right = nx > t;
+  keys.left = nx < -t;
+  keys.down = ny > t;
+  keys.up = ny < -t;
+}
+
+/* ============================= FULLSCREEN ============================= */
+
+const fsBtn = document.getElementById('fullscreen-button');
+const fsRoot = document.documentElement;
+const fsRequest = fsRoot.requestFullscreen || fsRoot.webkitRequestFullscreen;
+const fsExit = document.exitFullscreen || document.webkitExitFullscreen;
+const isFullscreen = ()=> !!(document.fullscreenElement || document.webkitFullscreenElement);
+
+function updateFullscreenButton(){
+  fsBtn.textContent = isFullscreen() ? '✕' : '⛶';
+  fsBtn.title = isFullscreen() ? 'Exit fullscreen' : 'Fullscreen';
+}
+
+if(fsBtn){
+  if(!fsRequest){
+    fsBtn.style.display = 'none';          // e.g. iPhone Safari has no fullscreen API for pages
+  } else {
+    fsBtn.addEventListener('click', ()=>{
+      try{
+        const p = isFullscreen() ? fsExit.call(document) : fsRequest.call(fsRoot);
+        if(p && p.catch) p.catch(()=>{});
+      }catch(err){}
+      fsBtn.blur();                         // so Space/Enter in the game never re-triggers it
+    });
+    document.addEventListener('fullscreenchange', updateFullscreenButton);
+    document.addEventListener('webkitfullscreenchange', updateFullscreenButton);
+    updateFullscreenButton();
+  }
+}
+
+/* ============================= CREATURE HOVER TOOLTIP ============================= */
+
+const tooltipEl = document.getElementById('creature-tooltip');
+const mouseScreen = { x: 0, y: 0 };
+let hoverLabel = null;
+
+window.addEventListener('pointermove', (e)=>{
+  mouseScreen.x = e.clientX;
+  mouseScreen.y = e.clientY;
+  if(hoverLabel) positionTooltip();
+});
+
+function positionTooltip(){
+  tooltipEl.style.left = mouseScreen.x + 'px';
+  tooltipEl.style.top = (mouseScreen.y + 20) + 'px';
+}
+
+function showHoverLabel(label){
+  hoverLabel = label;
+  tooltipEl.textContent = label;
+  tooltipEl.style.display = 'block';
+  positionTooltip();
+}
+
+function hideHoverLabel(label){
+  if(hoverLabel === label || label === undefined) hoverLabel = null;
+  if(!hoverLabel) tooltipEl.style.display = 'none';
+}
+
+function attachHoverLabel(g, label, hitRadius){
+  g._hoverLabel = label;
+  g._hoverR = hitRadius;
+}
+
+// Hover is tested by hand every frame (not through Pixi's event system) so it works while creatures
+// drift under a still cursor, never gets stuck, and can also be driven by a tap on touch screens.
+let mouseSeen = false, touchHideTimer = null;
+window.addEventListener('pointermove', ()=>{ mouseSeen = true; });
+window.addEventListener('pointerdown', (e)=>{
+  mouseScreen.x = e.clientX; mouseScreen.y = e.clientY; mouseSeen = true;
+  if(e.pointerType === 'touch'){                     // no hover on phones: a tap shows the name for a moment
+    clearTimeout(touchHideTimer);
+    touchHideTimer = setTimeout(()=>{ mouseSeen = false; hideHoverLabel(); }, 1800);
+  }
+});
+function refreshOceanHover(){
+  if(!gameStarted || dungeons.active){ return; }
+  if(!mouseSeen){ if(hoverLabel) hideHoverLabel(); return; }
+  const r = app.view.getBoundingClientRect();
+  if(mouseScreen.x < r.left || mouseScreen.x > r.right || mouseScreen.y < r.top || mouseScreen.y > r.bottom){ hideHoverLabel(); return; }
+  const wx = (mouseScreen.x - r.left) * app.screen.width / r.width - world.x;
+  const wy = (mouseScreen.y - r.top) * app.screen.height / r.height - world.y;
+  let best = null, bestD = Infinity;
+  for(const c of creaturesLayer.children){
+    if(!c._hoverLabel || !c.visible || c.destroyed) continue;
+    const rad = c._hoverR * Math.max(Math.abs(c.scale.x), Math.abs(c.scale.y), 0.5) + 8;
+    const d = Math.hypot(wx - c.x, wy - c.y) - rad;
+    if(d < 0 && d < bestD){ bestD = d; best = c._hoverLabel; }
+  }
+  if(best){ if(best !== hoverLabel) showHoverLabel(best); }
+  else if(hoverLabel) hideHoverLabel();
+}
+
+
+/* ============================= PLAYER ============================= */
+
+const JUMP_POWER = 13;      // upward launch speed when pressing Space underwater
+const JUMP_COOLDOWN = 55;   // frames (~0.9s)
+const JUMP_BOOST_FRAMES = 22;
+
+const player = {
+  x: 300, y: 900,
+  vx: 0, vy: 0,
+  angle: 0, displayAngle: 0,
+  tailPhase: 0,
+  size: 20,
+  maxSpeed: 9.0,
+  accel: 0.55,
+  drag: 0.94,
+  bob: 0,
+  bank: 0,
+  inAir: false,
+  flipping: false,
+  flipProgress: 0,
+  flipDir: 1,
+  flipXP: 0,
+  flipCounts: true,
+  jumpCd: 0,
+  boost: 0,
+  chomp: 0,
+  inX: 0, inY: 0          // eased analog input (keys / touch ramp in and out)
 };
-const PRIVATE = new Set(['server.js', 'package.json', 'package-lock.json']);
+// where the player sits on screen relative to centre (camera look-ahead, see main loop)
+const view = { ox: 0, oy: 0 };
+const PLAYER_COLORS = { body:0xff9d5c, fin:0xffd194 };
 
-/* --------------------------------------------------------------- helpers */
-
-const cleanName = (s)=> String(s || '').replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 16);
-const cleanText = (s)=> String(s || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
-const num = (v, lo, hi)=> (typeof v === 'number' && Number.isFinite(v)) ? Math.min(hi, Math.max(lo, v)) : null;
-
-// state = [x, y, vx, vy, angle, size, bodyColour, finColour, inCave]
-function cleanState(s){
-  if(!Array.isArray(s) || s.length !== 9) return null;
-  const out = [num(s[0], -1e7, 1e7), num(s[1], -1e7, 1e7), num(s[2], -200, 200), num(s[3], -200, 200),
-               num(s[4], -1e4, 1e4), num(s[5], 2, 200), num(s[6], 0, 0xffffff), num(s[7], 0, 0xffffff), s[8] ? 1 : 0];
-  return out.some(v => v === null) ? null : out;
+function tryJump(){
+  if(dungeons.active){ dungeons.fire(); return; }   // inside caves the jump key shoots bubbles
+  if(!gameStarted || commandOpen) return;
+  const upturned = player.y <= INV_SURFACE_Y;     // in the upturned sea "out of the water" is DOWN
+  if(!isWet(player.y)) return;                    // already airborne (or floating in space)
+  if(player.jumpCd > 0) return;
+  player.vy = upturned ? JUMP_POWER : -JUMP_POWER;
+  player.boost = JUMP_BOOST_FRAMES;
+  player.jumpCd = JUMP_COOLDOWN;
+  burstBubbles(player.x, player.y + (upturned ? -1 : 1)*player.size*0.5, 10);
+  playBlip();
+  scheduleHideInstructions(8000);
 }
 
-/* ------------------------------------------------------------ http server */
+function updatePlayer(dt){
+  if(dungeons.active) return dungeons.updatePlayer(dt);   // inside a cave (see dungeons.js)
+  const wasUnderwater = isWet(player.y);
 
-const server = http.createServer((req, res)=>{
-  res.setHeader('Access-Control-Allow-Origin', '*');           // so a page hosted elsewhere can read the player count
-  let url;
-  try{ url = new URL(req.url, 'http://localhost'); }catch(err){ res.writeHead(400); return res.end(); }
+  if(player.jumpCd > 0) player.jumpCd -= dt;
+  if(player.boost > 0) player.boost -= dt;
+  player.chomp *= Math.pow(0.85, dt);
 
-  if(url.pathname === '/online'){
-    res.writeHead(200, { 'Content-Type':'application/json', 'Cache-Control':'no-store' });
-    return res.end(JSON.stringify({ online: players.size, max: MAX_PLAYERS }));
+  let ax = 0, ay = 0;
+  if(gameStarted){
+    // ease the input so starts and stops feel like pushing through water, not a switch
+    const rx = (keys.right?1:0) - (keys.left?1:0), ry = (keys.down?1:0) - (keys.up?1:0);
+    const ease = Math.min(1, (rx||ry ? 0.2 : 0.12) * dt);
+    player.inX += (rx - player.inX) * ease;
+    player.inY += (ry - player.inY) * ease;
+    const mag = Math.hypot(player.inX, player.inY);
+    const nrm = mag > 1 ? 1/mag : 1;
+    ax = player.inX * nrm * player.accel;
+    ay = player.inY * nrm * player.accel;
+  } else {
+    const t = performance.now()*0.00006;
+    const idleAccel = 0.34;
+    ax = Math.sin(t)*idleAccel*0.35;
+    ay = Math.cos(t*0.7)*idleAccel*0.22;
   }
-  if(req.method !== 'GET' && req.method !== 'HEAD'){ res.writeHead(405); return res.end(); }
 
-  let rel;
-  try{ rel = decodeURIComponent(url.pathname); }catch(err){ res.writeHead(400); return res.end(); }
-  if(rel === '/') rel = '/index.html';
-  const file = path.normalize(path.join(ROOT, rel));
-  const inside = file.startsWith(ROOT + path.sep);
-  const parts = path.relative(ROOT, file).split(path.sep);
-  const ext = path.extname(file).toLowerCase();
-  if(!inside || !MIME[ext] || PRIVATE.has(path.basename(file)) || parts.some(p => p.startsWith('.') || p === 'node_modules')){
-    res.writeHead(404); return res.end('Not found');
+  const abilitySpeed = dungeons.speedMul();   // shapeshift form + dash
+  ax *= abilitySpeed; ay *= abilitySpeed;
+  const inAir = !isWet(player.y);
+  const inSpace = inAir && player.y <= SPACE_Y;   // above the rock crust: weightless
+  const prevX = player.x, prevY = player.y;
+
+  if(inSpace){
+    ax *= 0.9; ay *= 0.9;                          // no gravity, no wind: just drift and thrust
+  } else if(inAir){
+    ax *= 0.45;
+    ay = ay*0.25 + GRAVITY*dungeons.gravityMul();   // Sea Wings glide
+    // wing power: hold Up in the sky to climb toward the upturned sea (it eases off right under its surface so you can still drop back out)
+    if(gameStarted && keys.up && player.y < SURFACE_Y - 60) ay -= 0.32*(1 - 0.5*clamp((-5600 - player.y)/900, 0, 1));
+    ax += MoceanSky.windX(player.y, performance.now())*0.02;
   }
-  fs.readFile(file, (err, data)=>{
-    if(err){ res.writeHead(404); return res.end('Not found'); }
-    res.writeHead(200, { 'Content-Type': MIME[ext], 'Cache-Control':'no-cache' });
-    res.end(req.method === 'HEAD' ? undefined : data);
-  });
-});
 
-/* -------------------------------------------------------- websocket server */
+  player.vx += ax * dt;
+  player.vy += ay * dt;
 
-const wss = new WebSocketServer({ server, maxPayload: 1024, perMessageDeflate: false });
-const players = new Map();            // id -> player (joined players only)
-const perIp = new Map();
-let nextId = 1;
+  if(!inAir){
+    // ocean current + a faint buoyant bob
+    const cur = water.current(player.x, player.y <= INV_SURFACE_Y ? INV_SURFACE_Y - player.y : player.y, performance.now());
+    player.vx += cur.x * 0.03 * dt;
+    player.vy += (cur.y * 0.03 + Math.sin(performance.now()*0.0013)*0.004) * dt;
+  }
 
-function send(ws, obj){ if(ws.readyState === 1) ws.send(JSON.stringify(obj)); }
-function broadcast(obj, exceptId){
-  const data = JSON.stringify(obj);
-  for(const p of players.values()) if(p.id !== exceptId && p.ws.readyState === 1) p.ws.send(data);
+  if(inSpace){
+    const sd = Math.pow(0.987, dt);
+    player.vx *= sd; player.vy *= sd;
+  } else if(inAir){
+    const airSp = Math.hypot(player.vx, player.vy);
+    const airDrag = Math.pow(1 - 0.0012 - airSp*0.0002, dt);   // quadratic-ish air drag
+    player.vx *= airDrag; player.vy *= Math.pow(1 - airSp*0.00012, dt);
+  } else {
+    // While a jump is charging out of the water, vertical drag is almost off
+    const vDrag = player.boost > 0 ? 0.985 : player.drag;
+    player.vx *= Math.pow(player.drag, dt);
+    player.vy *= Math.pow(vDrag, dt);
+  }
+
+  const rawSpeed = Math.hypot(player.vx, player.vy);
+  let maxS = player.maxSpeed * abilitySpeed;
+  if(inSpace) maxS = player.maxSpeed*1.4*abilitySpeed;
+  else if(inAir) maxS = player.maxSpeed*1.8;
+  else if(player.boost > 0) maxS = Math.max(maxS, JUMP_POWER*1.05);
+  if(rawSpeed > maxS){
+    const k = maxS / rawSpeed;
+    player.vx *= k; player.vy *= k;
+  }
+
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+
+  // (no lid: deep space goes on forever)
+
+  // seafloor collision: rest on the sand and slide along slopes instead of sinking through
+  const floorLimit = floorY(player.x) - player.size*dungeons.look().size*0.6;
+  if(player.y > floorLimit){
+    const slope = (floorY(player.x + 4) - floorY(player.x - 4)) / 8;
+    player.y = floorLimit;
+    if(player.vy > 1.5){ water.kick(player.x, floorLimit + 8, player.vy*0.5); player.vy *= -0.25; }
+    else if(player.vy > 0) player.vy = 0;
+    if(Math.abs(player.vx) > 2.5 && Math.random() < 0.3) water.kick(player.x, floorLimit + 8, 1);
+    if(slope * player.vx > 0) player.vx *= Math.pow(0.9, dt);   // uphill scrape slows you
+  }
+
+  // the upturned sea's ceiling is a rock crust (SLAB px thick) with star rifts through it
+  {
+    const rr = player.size*dungeons.look().size*0.6;
+    const ceilBase = invFloorY(player.x);
+    const crustTop = SPACE_Y;
+    const inCrust = player.y < ceilBase + rr && player.y > crustTop - rr;
+    if(inCrust && !MoceanSky.inRift(player.x, rr)){
+      if(prevY >= ceilBase){                         // came up from the sea: bonk the ceiling
+        player.y = ceilBase + rr;
+        if(player.vy < -1.5) player.vy *= -0.25; else if(player.vy < 0) player.vy = 0;
+      } else if(prevY <= crustTop){                  // came down from space: land on the crust
+        player.y = crustTop - rr;
+        if(player.vy > 1.5) player.vy *= -0.25; else if(player.vy > 0) player.vy = 0;
+      } else {                                       // inside a rift: its walls hold you in
+        const rb = MoceanSky.riftBounds(prevX);
+        player.x = clamp(player.x, rb.l + rr, rb.r - rr);
+        player.vx *= -0.2;
+      }
+    }
+  }
+
+  const nowUnderwater = isWet(player.y);
+
+  if(wasUnderwater !== nowUnderwater){
+    // which of the three surfaces did we just cross: the sea, the upturned sea's surface, or the top of a star rift?
+    let surfY = SURFACE_Y, outDir = -1;                          // outDir: which way is "out of the water"
+    if(player.y < INV_SURFACE_Y/2){
+      const rift = Math.abs(player.y - SPACE_Y) < Math.abs(player.y - INV_SURFACE_Y);
+      surfY = rift ? SPACE_Y : INV_SURFACE_Y; outDir = rift ? -1 : 1;
+    }
+    spawnSplash(player.x, surfY);
+    if(!wasUnderwater){          // diving back in: water resists, spray scales with impact
+      const impact = Math.abs(player.vy);
+      burstBubbles(player.x, surfY - outDir*10, Math.round(clamp(impact*1.4, 4, 20)));
+      player.vy *= 0.6; player.vx *= 0.88;
+    }
+    const outSpeed = outDir*player.vy;                           // speed away from the water we just left
+    if(wasUnderwater && !nowUnderwater && outSpeed > FLIP_SPEED_THRESHOLD && !player.flipping){
+      player.flipping = true;
+      player.flipProgress = 0;
+      player.flipDir = player.vx >= 0 ? 1 : -1;
+      player.flipCounts = true;
+      // faster breach = bigger flip reward
+      player.flipXP = 10 + Math.round(clamp(outSpeed, 0, 16));
+    }
+  }
+
+  const speed = Math.hypot(player.vx, player.vy);
+  if(speed > 0.08 && !player.flipping){ player.angle = Math.atan2(player.vy, player.vx); }
+  player.displayAngle = lerpAngle(player.displayAngle, player.angle, 0.12*dt);
+
+  if(player.flipping){
+    const flipRate = 0.07 * (1 + Math.min(speed/player.maxSpeed, 1.4));
+    player.flipProgress += dt * flipRate;
+    if(player.flipProgress >= 1){
+      player.flipping = false;
+      player.flipProgress = 0;
+      player.angle = Math.atan2(player.vy, player.vx);
+      player.displayAngle = player.angle;
+      if(player.flipCounts) awardFlip(player.flipXP);
+      player.flipCounts = true;
+    }
+  }
+
+  const angleDiff = ((player.angle - player.displayAngle + Math.PI) % (Math.PI*2)) - Math.PI;
+  player.bank = clamp(angleDiff * 1.8, -1, 1);
+
+  const moveFactor = 0.5 + Math.min(speed/player.maxSpeed, 1)*1.85;
+  player.tailPhase += 0.155*dt*moveFactor*2.2;
+  player.bob = inAir ? 0 : Math.sin(performance.now()*0.0025)*1.6;
+  player.inAir = inAir;
+
+  return speed;
 }
 
-wss.on('connection', (ws, req)=>{
-  const ip = (TRUST_PROXY && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || '?';
-  if((perIp.get(ip) || 0) >= MAX_PER_IP){ send(ws, { t:'err', text:'Too many connections from your address.' }); return ws.close(1008); }
-  perIp.set(ip, (perIp.get(ip) || 0) + 1);
+/* ============================= PROGRESSION (XP / LEVELS) ============================= */
 
-  const p = { id: nextId++, ws, ip, name:'', joined:false, s:null, dirty:false, lastS:0, chatTimes:[], lastName:0, lastPing:0 };
-  ws.alive = true;
-  ws.on('pong', ()=>{ ws.alive = true; });
-  setTimeout(()=>{ if(!p.joined) ws.terminate(); }, 10000);
+const SAVE_KEY = 'mocean.progress.v1';
+const progress = { level: 1, xp: 0 };
 
-  ws.on('message', (raw)=>{
-    let m; try{ m = JSON.parse(raw.toString()); }catch(err){ return; }
-    if(!m || typeof m.t !== 'string') return;
-    const now = Date.now();
+function xpNeeded(level){ return Math.floor(30 * Math.pow(level, 1.35)); }
 
-    if(m.t === 'ping'){                                // lets the game show your latency
-      if(now - p.lastPing > 400){ p.lastPing = now; send(ws, { t:'pong', ts: typeof m.ts === 'number' ? m.ts : 0 }); }
-      return;
+function applyLevelStats(){
+  // The fish grows a little with every level (capped)
+  player.size = 20 + Math.min(progress.level - 1, 15) * 0.8;
+}
+
+function saveProgress(){
+  try{ localStorage.setItem(SAVE_KEY, JSON.stringify(progress)); }catch(err){}
+}
+
+function loadProgress(){
+  try{
+    const raw = localStorage.getItem(SAVE_KEY);
+    if(!raw) return;
+    const d = JSON.parse(raw);
+    if(Number.isFinite(d.level) && d.level >= 1){
+      progress.level = Math.min(99, Math.floor(d.level));
+      progress.xp = clamp(Math.floor(d.xp || 0), 0, xpNeeded(progress.level) - 1);
     }
+  }catch(err){}
+}
 
-    if(m.t === 'join'){
-      if(p.joined) return;
-      if(players.size >= MAX_PLAYERS){ send(ws, { t:'err', text:'The server is full.' }); return ws.close(1013); }
-      p.name = cleanName(m.name) || ('Fish' + p.id);
-      const denied = !nameOk(p.name, m.key);
-      if(denied) p.name = 'Fish' + p.id;
-      p.joined = true;
-      players.set(p.id, p);
-      send(ws, { t:'welcome', id:p.id, name:p.name, n:players.size,
-                 players: Array.from(players.values()).filter(o => o !== p).map(o => ({ id:o.id, name:o.name, s:o.s, typing:!!o.typing })) });
-      broadcast({ t:'join', p:{ id:p.id, name:p.name }, n:players.size }, p.id);
-      if(denied) send(ws, { t:'sys', text:'That name is reserved, so you were renamed ' + p.name + '. Pick another with /name.' });
-      return;
-    }
-    if(!p.joined) return;
+const levelValEl = document.getElementById('levelVal');
+const xpTextEl = document.getElementById('xpText');
+const xpFillEl = document.getElementById('xpFill');
+const levelBannerEl = document.getElementById('levelup-banner');
+const levelBannerNumEl = document.getElementById('luLevel');
 
-    if(m.t === 's'){
-      if(now - p.lastS < 40) return;                 // at most ~25 updates / second
-      const s = cleanState(m.s);
-      if(s){ p.s = s; p.dirty = true; p.lastS = now; }
-    } else if(m.t === 'chat'){
-      const text = cleanText(m.text);
-      if(!text) return;
-      p.chatTimes = p.chatTimes.filter(t => now - t < 10000);
-      if(p.chatTimes.length >= 5 || (p.chatTimes.length && now - p.chatTimes[p.chatTimes.length - 1] < 600)){
-        return send(ws, { t:'sys', text:'Slow down \u2014 you are sending messages too fast.' });
+function updateXPUI(){
+  const need = xpNeeded(progress.level);
+  levelValEl.textContent = progress.level;
+  xpTextEl.textContent = `${progress.xp} / ${need} XP`;
+  xpFillEl.style.width = (progress.xp / need * 100).toFixed(1) + '%';
+}
+
+function popText(text, cls){
+  const el = document.createElement('div');
+  el.className = 'xp-pop' + (cls ? ' ' + cls : '');
+  el.textContent = text;
+  el.style.left = (app.screen.width/2 + rand(-26,26)) + 'px';
+  el.style.top = (app.screen.height/2 - 46 - player.size) + 'px';
+  document.body.appendChild(el);
+  setTimeout(()=> el.remove(), 1200);
+}
+
+// Merge rapid-fire gains (e.g. swimming through a school) into one popup
+let popAcc = 0, popLabel = '', popTimer = null;
+function queueXPPop(amount, label){
+  popAcc += amount;
+  if(label) popLabel = label;
+  if(popTimer) return;
+  popTimer = setTimeout(()=>{
+    popText(`+${popAcc} XP` + (popLabel ? `  ${popLabel}` : ''), popLabel ? 'flip' : '');
+    popAcc = 0; popLabel = ''; popTimer = null;
+  }, 200);
+}
+
+function showLevelUp(){
+  levelBannerNumEl.textContent = progress.level;
+  levelBannerEl.classList.remove('show');
+  void levelBannerEl.offsetWidth;       // restart the animation
+  levelBannerEl.classList.add('show');
+  burstBubbles(player.x, player.y, 22);
+  playLevelUp();
+}
+
+function addXP(amount, label){
+  if(!(amount > 0)) return;
+  progress.xp += amount;
+  let leveled = false;
+  while(progress.xp >= xpNeeded(progress.level)){
+    progress.xp -= xpNeeded(progress.level);
+    progress.level++;
+    leveled = true;
+  }
+  if(leveled){ applyLevelStats(); showLevelUp(); }
+  queueXPPop(amount, label);
+  updateXPUI();
+  saveProgress();
+}
+
+function awardFlip(xp){ addXP(xp, 'Flip!'); }
+
+function resetProgress(){
+  progress.level = 1; progress.xp = 0;
+  if(typeof dungeons !== 'undefined') dungeons.resetUpgrades();
+  applyLevelStats(); updateXPUI(); saveProgress();
+}
+
+/* ---- eating ---- */
+
+// Fish the player can eat, the XP they give, and the level needed to swallow them
+const EDIBLE = {
+  school:     { xp: 6,  minLevel: 1 },
+  parrotfish: { xp: 14, minLevel: 2 },
+  seahorse:   { xp: 12, minLevel: 2 },
+  lionfish:   { xp: 18, minLevel: 3 },
+  pufferfish: { xp: 22, minLevel: 3 },
+  blobfish:   { xp: 32, minLevel: 5 },
+  oarfish:    { xp: 45, minLevel: 7 },
+  swordfish:  { xp: 70, minLevel: 9 }
+};
+
+let lastTooBigMsg = 0;
+function tooBigMessage(minLevel){
+  const now = performance.now();
+  if(now - lastTooBigMsg < 1400) return;
+  lastTooBigMsg = now;
+  popText(`Need level ${minLevel}`, 'warn');
+}
+
+function eatenEffect(x, y, xp){
+  burstBubbles(x, y, 6);
+  player.chomp = 1;
+  hideHoverLabel();
+  playBlip();
+  addXP(xp);
+}
+
+function checkEating(){
+  if(!gameStarted || player.y < SURFACE_Y + 6) return;
+
+  const formSize = player.size * dungeons.look().size;
+  const effLevel = progress.level + dungeons.levelBonus();   // shark form eats bigger fish
+  const mouthX = player.x + Math.cos(player.displayAngle)*formSize*0.55;
+  const mouthY = player.y + Math.sin(player.displayAngle)*formSize*0.55;
+  const reach = formSize*0.85*dungeons.eatMul();       // Pearl Magnet widens the bite
+
+  // schools of small fish (each member is eaten individually)
+  const school = EDIBLE.school;
+  for(let si = schools.length - 1; si >= 0; si--){
+    const sc = schools[si];
+    const roughR = reach + 70;
+    if(dist2(sc.x, sc.y, mouthX, mouthY) > roughR*roughR) continue;
+    for(let mi = sc.members.length - 1; mi >= 0; mi--){
+      const m = sc.members[mi];
+      const rr = reach + m.size*0.8;
+      if(dist2(m.g.x, m.g.y, mouthX, mouthY) < rr*rr){
+        if(effLevel < school.minLevel){ tooBigMessage(school.minLevel); continue; }
+        eatenEffect(m.g.x, m.g.y, school.xp);
+        creaturesLayer.removeChild(m.g);
+        m.g.destroy();
+        sc.members.splice(mi, 1);
       }
-      p.chatTimes.push(now);
-      p.typing = false;
-      broadcast({ t:'chat', id:p.id, name:p.name, text });
-    } else if(m.t === 'typing'){
-      const on = m.on === true;
-      if(on === p.typing) return;
-      p.typing = on;
-      broadcast({ t:'typing', id:p.id, on }, p.id);
-    } else if(m.t === 'name'){
-      const n = cleanName(m.name);
-      if(!n || n === p.name || now - p.lastName < 2000) return;
-      if(!nameOk(n, m.key)){
-        send(ws, { t:'sys', text:'That name is reserved.' });
-        return send(ws, { t:'name', id:p.id, name:p.name });      // tell the client to keep its old name
-      }
-      p.lastName = now; p.name = n;
-      broadcast({ t:'name', id:p.id, name:n }, p.id);
     }
+    if(sc.members.length === 0) schools.splice(si, 1);
+  }
+
+  // individual fish
+  for(let i = npcs.length - 1; i >= 0; i--){
+    const n = npcs[i];
+    const def = EDIBLE[n.type];
+    if(!def) continue;
+    const rr = reach + n.size*0.7;
+    if(dist2(n.x, n.y, mouthX, mouthY) < rr*rr){
+      if(effLevel < def.minLevel){ tooBigMessage(def.minLevel); continue; }
+      eatenEffect(n.x, n.y, def.xp);
+      destroyNpc(n);
+      npcs.splice(i, 1);
+    }
+  }
+}
+
+loadProgress();
+applyLevelStats();
+updateXPUI();
+
+/* ============================= BUBBLES ============================= */
+
+let bubbles = [];
+const BUBBLE_POP_FRAMES = 9;
+
+function inBubbleWater(x, y){
+  return (y >= SURFACE_Y + 20 && y <= floorY(x) - 4) || (y <= INV_SURFACE_Y - 20 && y >= invFloorY(x) + 4);
+}
+function makeBubble(x, y, r, speed, bright){
+  const inv = y < INV_SURFACE_Y/2;       // bubbles in the upturned sea "rise" DOWN, toward its surface
+  return { x, y, r, r0:r, speed, wobble:rand(0,Math.PI*2), wobSpeed:rand(0.8,1.5), bright, age:0, pop:0,
+           dir: inv ? -1 : 1, surf: inv ? INV_SURFACE_Y : SURFACE_Y };
+}
+
+// ambient bubbles rise up through the visible water; nearPlayer ones trail off the fish
+function spawnBubble(nearPlayer){
+  if(dungeons.active) return;
+  const W = app.screen.width, H = app.screen.height;
+  let x, y;
+  if(nearPlayer){
+    const back = player.size*1.6;
+    x = player.x - Math.cos(player.displayAngle)*back + rand(-5,5);
+    y = player.y - Math.sin(player.displayAngle)*back + rand(-5,5);
+  } else {
+    x = player.x + rand(-W*0.75, W*0.75);
+    y = player.y < INV_SURFACE_Y/2 ? player.y - H*0.55 - rand(0, 80)    // upturned sea: they enter from above the view
+                                   : player.y + H*0.55 + rand(0, 80);   // just below the view, so it rises into sight
+  }
+  if(!inBubbleWater(x, y)) return;
+  const r = nearPlayer ? rand(1.2, 3.2) : (Math.random() < 0.15 ? rand(4, 6.5) : rand(1.5, 3.8));
+  bubbles.push(makeBubble(x, y, r, rand(0.4, 1.3), nearPlayer));
+  if(bubbles.length > 260) bubbles.shift();
+}
+
+// vents on the seafloor puff little chains of bubbles
+function spawnVentBubbles(dt){
+  if(dungeons.active) return;
+  const W = app.screen.width, H = app.screen.height;
+  if(player.y + H*0.5 + 160 < floorY(player.x)) return;        // floor not near the view
+  const spacing = 540;
+  const first = Math.floor((player.x - W*0.7)/spacing), last = Math.floor((player.x + W*0.7)/spacing);
+  for(let i=first; i<=last; i++){
+    if(hash(i*7.31 + 2.2) > Bio.ventRate(i*spacing)) continue;       // volcanic biomes are full of vents
+    const vx = i*spacing + hash(i*3.7)*200;
+    if(Math.random() < 0.09*dt){
+      const bx = vx + rand(-5,5);
+      bubbles.push(makeBubble(bx, floorY(bx) - 4, rand(1.2, 3.4), rand(0.5, 1.1), false));
+    }
+  }
+}
+
+function updateBubbles(dt){
+  const bn = performance.now();
+  const W = app.screen.width, H = app.screen.height;
+  for(const b of bubbles){
+    b.age += dt;
+    if(b.pop > 0){ b.pop += dt; continue; }
+    b.y -= b.dir*(b.speed*0.7 + b.r0*0.12)*dt;                       // bigger bubbles rise faster
+    b.r = Math.min(b.r0*1.45, b.r + b.r0*0.0007*dt);            // swell a little as pressure drops
+    const c = water.current(b.x, b.y, bn);
+    const wig = Math.sin(bn*0.0045*b.wobSpeed + b.wobble)*0.3*(0.45 + b.r0*0.12);
+    b.x += (wig + c.x*0.4)*dt;
+    if(b.dir > 0 ? b.y <= b.surf : b.y >= b.surf) b.pop = 0.01; // reached the surface: pop
+  }
+  bubbles = bubbles.filter(b => b.pop < BUBBLE_POP_FRAMES
+    && Math.abs(b.x - player.x) < W*1.5 && Math.abs(b.y - player.y) < H*1.5);
+}
+
+function redrawBubbles(){
+  bubblesG.clear();
+  const bn = performance.now();
+  for(const b of bubbles){
+    if(b.pop > 0){                                              // surface pop: ring expands, spits droplets
+      const f = b.pop/BUBBLE_POP_FRAMES;
+      bubblesG.lineStyle(1.2, 0xffffff, (1 - f)*0.55);
+      bubblesG.moveTo(b.x + b.r*(1 + f*1.1), b.surf);
+      bubblesG.drawCircle(b.x, b.surf, b.r*(1 + f*1.1));
+      for(let k=0;k<4;k++){
+        const a = -Math.PI*(0.15 + k*0.23);
+        bubblesG.moveTo(b.x + Math.cos(a)*b.r*(1+f), b.surf + Math.sin(a)*b.r*(1+f)*b.dir);
+        bubblesG.lineTo(b.x + Math.cos(a)*b.r*(1.6+f*2), b.surf + Math.sin(a)*b.r*(1.6+f*2)*b.dir);
+      }
+      continue;
+    }
+    const fade = Math.min(1, b.age/18);
+    const a = (b.bright ? 0.6 : 0.34)*fade;
+    const sq = Math.sin(bn*0.009*b.wobSpeed + b.wobble)*0.11;   // bubbles wobble between tall and wide
+    bubblesG.lineStyle(1.2, 0xdff6ff, a);
+    bubblesG.drawEllipse(b.x, b.y, b.r*(1 + sq), b.r*(1 - sq));
+    if(b.r > 2.2){                                              // glint arc + tiny reflection dot
+      bubblesG.lineStyle(1, 0xffffff, Math.min(1, a*1.3));
+      // arc() continues from the pen's last position, which drew stray lines to other bubbles (and to popped ones
+      // up at the surface): start a fresh sub-path at the arc's first point
+      bubblesG.moveTo(b.x + Math.cos(Math.PI*1.1)*b.r*0.66, b.y + Math.sin(Math.PI*1.1)*b.r*0.66);
+      bubblesG.arc(b.x, b.y, b.r*0.66, Math.PI*1.1, Math.PI*1.55);
+      bubblesG.lineStyle(0);
+      bubblesG.beginFill(0xffffff, a*0.7);
+      bubblesG.drawCircle(b.x + b.r*0.38, b.y + b.r*0.36, Math.max(0.6, b.r*0.1));
+      bubblesG.endFill();
+    }
+  }
+}
+
+/* ============================= SURFACE SPLASHES ============================= */
+
+let splashes = [];
+function spawnSplash(x, y){
+  splashes.push({ x, y, t: 0, life: 30 });
+  for(let i=0;i<9;i++){
+    bubbles.push(makeBubble(x + rand(-12,12), y + (y < INV_SURFACE_Y/2 ? -1 : 1)*rand(3,12), rand(1,3.2), rand(0.7,2.0), true));
+  }
+}
+
+function burstBubbles(x, y, count){
+  for(let i=0;i<count;i++){
+    bubbles.push(makeBubble(x + rand(-14,14), y + rand(-10,10), rand(1.2,3.6), rand(0.8,2.2), true));
+  }
+  if(bubbles.length > 260) bubbles.splice(0, bubbles.length - 260);
+}
+
+function updateSplashes(dt){
+  for(const sp of splashes) sp.t += dt;
+  splashes = splashes.filter(sp => sp.t < sp.life);
+}
+
+function redrawSplashes(){
+  splashG.clear();
+  for(const sp of splashes){
+    const f = sp.t / sp.life;
+    const r = 6 + f*36;
+    splashG.lineStyle(2, 0xffffff, (1-f)*0.55);
+    splashG.drawEllipse(sp.x, sp.y, r, r*0.32);
+  }
+}
+
+/* ============================= CREATURES (see fish.js) ============================= */
+
+const Fish = MoceanFish({
+  creaturesLayer, rand, randi, clamp, lerp, lerpAngle, ROUND,
+  WORLD_TOP_MARGIN, floorY, attachHoverLabel,
+  get options(){ return options; }
+});
+const {
+  drawFishShape, SHARK_COLORS, schools, spawnSchool, updateSchool, destroySchool, spawnJellyfish, updateJelly, spawnCrab, updateCrab, spawnTurtle, updateTurtle, spawnShark, updateShark, spawnOctopus, updateOctopus, spawnSeahorse, updateSeahorse, spawnStingray, updateStingray, spawnEel, updateEel, spawnStarfish, updateStarfish, spawnSeaUrchin, updateSeaUrchin, spawnPufferfish, updatePufferfish, spawnMantaRay, updateMantaRay, spawnSquid, updateSquid, spawnAnglerfish, updateAnglerfish, spawnNarwhal, updateNarwhal, spawnHammerhead, updateHammerhead, spawnIsopod, updateIsopod, spawnLionfish, updateLionfish, spawnCuttlefish, updateCuttlefish, spawnParrotfish, updateParrotfish, spawnBlobfish, updateBlobfish, spawnSeaDragon, updateSeaDragon, spawnWhale, updateWhale, spawnDolphin, updateDolphin, spawnSwordfish, updateSwordfish, spawnNautilus, updateNautilus, spawnSeaSnake, updateSeaSnake, spawnSunfish, updateSunfish, spawnDumboOctopus, updateDumboOctopus, spawnGoblinShark, updateGoblinShark, spawnOarfish, updateOarfish, spawnManatee, updateManatee, spawnPrismKoi, updatePrismKoi, spawnCloudray, updateCloudray, spawnStarwhale, updateStarwhale
+} = Fish;
+
+/* ============================= NPC MANAGER ============================= */
+
+let npcs = [];
+const SPAWN_RADIUS_MIN = 700;
+const SPAWN_RADIUS_MAX = 1300;
+const DESPAWN_RADIUS = 2100;
+const MAX_NPCS = 120;
+const MAX_SCHOOLS = 12;
+
+let spawnTimer = 0;
+
+function totalCreatureCount(){
+  let n = npcs.length;
+  for(const s of schools) n += s.members.length;
+  return n;
+}
+
+function trySpawn(dt){
+  spawnTimer -= dt;
+  if(spawnTimer > 0) return;
+  const spawnRateMult = options.difficulty === 'hard' ? 1.4 : (options.difficulty === 'peaceful' ? 0.75 : 1);
+  spawnTimer = rand(30,90) / spawnRateMult;
+  if(totalCreatureCount() >= MAX_NPCS) return;
+
+  const angle = rand(0, Math.PI*2);
+  const d = rand(SPAWN_RADIUS_MIN, SPAWN_RADIUS_MAX);
+  let x = player.x + Math.cos(angle)*d;
+  let y = clamp(player.y + Math.sin(angle)*d, WORLD_TOP_MARGIN+40, 7500);
+
+  const r = Math.random();
+  if(player.y <= INV_SURFACE_Y && r < 0.045){ npcs.push(spawnPrismKoi(x, clamp(y, INV_SURFACE_Y-1400, INV_SURFACE_Y-80))); }
+  else if(player.y <= INV_SURFACE_Y && r < 0.075){ npcs.push(spawnCloudray(x, clamp(y, INV_SURFACE_Y-1400, INV_SURFACE_Y-80))); }
+  else if(player.y <= INV_SURFACE_Y && r < 0.09){ npcs.push(spawnStarwhale(x, clamp(y, INV_SURFACE_Y-1400, INV_SURFACE_Y-80))); }
+  else if(r < 0.18 && schools.length < MAX_SCHOOLS){
+    spawnSchool(x,y);
+  } else if(r < 0.24){
+    npcs.push(spawnJellyfish(x, clamp(y, WORLD_TOP_MARGIN+60, 7000)));
+  } else if(r < 0.29){
+    npcs.push(spawnCrab(x));
+  } else if(r < 0.34){
+    npcs.push(spawnTurtle(x,y));
+  } else if(r < 0.39){
+    npcs.push(spawnOctopus(x,y));
+  } else if(r < 0.43){
+    npcs.push(spawnSeahorse(x,y));
+  } else if(r < 0.47){
+    npcs.push(spawnStingray(x,y));
+  } else if(r < 0.51){
+    npcs.push(spawnEel(x, clamp(y, WORLD_TOP_MARGIN+40, 7500)));
+  } else if(r < 0.55){
+    npcs.push(spawnStarfish(x));
+  } else if(r < 0.59){
+    npcs.push(spawnSeaUrchin(x, y));
+  } else if(r < 0.63){
+    npcs.push(spawnPufferfish(x, y));
+  } else if(r < 0.66){
+    npcs.push(spawnMantaRay(x, y));
+  } else if(r < 0.69){
+    npcs.push(spawnSquid(x, y));
+  } else if(r < 0.72){
+    npcs.push(spawnAnglerfish(x, y));
+  } else if(r < 0.75){
+    npcs.push(spawnNarwhal(x, y));
+  } else if(r < 0.78){
+    npcs.push(spawnHammerhead(x, y));
+  } else if(r < 0.81){
+    npcs.push(spawnIsopod(x, y));
+  } else if(r < 0.84){
+    npcs.push(spawnLionfish(x, y));
+  } else if(r < 0.87){
+    npcs.push(spawnCuttlefish(x, y));
+  } else if(r < 0.90){
+    npcs.push(spawnParrotfish(x, y));
+  } else if(r < 0.93){
+    npcs.push(spawnBlobfish(x, y));
+  } else if(r < 0.96){
+    npcs.push(spawnSeaDragon(x, y));
+  } else if(r < 0.98){
+    npcs.push(spawnOarfish(x, y));
+  } else if(r < 0.97){
+    npcs.push(spawnManatee(x, y));
+  } else if(r < 0.98){
+    npcs.push(spawnWhale(x, clamp(y, WORLD_TOP_MARGIN+80, 3000)));
+  } else if(r < 0.985){
+    npcs.push(spawnDolphin(x, clamp(y, WORLD_TOP_MARGIN+60, 2500)));
+  } else if(r < 0.989){
+    npcs.push(spawnSwordfish(x, clamp(y, WORLD_TOP_MARGIN+80, 3500)));
+  } else if(r < 0.992){
+    npcs.push(spawnNautilus(x, clamp(y, 2000, 7500)));
+  } else if(r < 0.994){
+    npcs.push(spawnSeaSnake(x, clamp(y, 1500, 7500)));
+  } else if(r < 0.9955){
+    npcs.push(spawnSunfish(x, clamp(y, WORLD_TOP_MARGIN+80, 3000)));
+  } else if(r < 0.9965){
+    npcs.push(spawnDumboOctopus(x, clamp(y, 5000, 7500)));
+  } else if(r < 0.9975){
+    npcs.push(spawnGoblinShark(x, clamp(y, 4000, 7500)));
+  } else if(options.difficulty !== 'peaceful'){
+    npcs.push(spawnShark(x,y));
+  }
+
+  if(options.difficulty === 'hard' && Math.random() < 0.12 && totalCreatureCount() < MAX_NPCS){
+    npcs.push(spawnShark(player.x + Math.cos(angle+1)*d, y));
+  }
+}
+
+function destroyNpc(n){ creaturesLayer.removeChild(n.g); n.g.destroy(); }
+
+const BOTTOM_DWELLERS = { crab:1, starfish:1, seahub:1, isopod:1 };
+function updateNPCs(dt){
+  const cnow = performance.now();
+  for(const n of npcs){
+    if(BOTTOM_DWELLERS[n.type]) continue;
+    const c = water.current(n.x, n.y, cnow);
+    n.x += c.x*0.5*dt;                       // sea life is carried a little by the current
+    if(n.targetX !== undefined) n.targetX += c.x*0.5*dt;
+  }
+  for(const n of npcs){
+    if(n.type==='jelly') updateJelly(n, dt);
+    else if(n.type==='crab') updateCrab(n, dt);
+    else if(n.type==='turtle') updateTurtle(n, dt);
+    else if(n.type==='shark') updateShark(n, dt);
+    else if(n.type==='octopus') updateOctopus(n, dt);
+    else if(n.type==='seahorse') updateSeahorse(n, dt);
+    else if(n.type==='stingray') updateStingray(n, dt);
+    else if(n.type==='eel') updateEel(n, dt);
+    else if(n.type==='starfish') updateStarfish(n, dt);
+    else if(n.type==='seahub') updateSeaUrchin(n, dt);
+    else if(n.type==='pufferfish') updatePufferfish(n, dt);
+    else if(n.type==='mantaray') updateMantaRay(n, dt);
+    else if(n.type==='squid') updateSquid(n, dt);
+    else if(n.type==='anglerfish') updateAnglerfish(n, dt);
+    else if(n.type==='narwhal') updateNarwhal(n, dt);
+    else if(n.type==='hammerhead') updateHammerhead(n, dt);
+    else if(n.type==='isopod') updateIsopod(n, dt);
+    else if(n.type==='lionfish') updateLionfish(n, dt);
+    else if(n.type==='cuttlefish') updateCuttlefish(n, dt);
+    else if(n.type==='parrotfish') updateParrotfish(n, dt);
+    else if(n.type==='blobfish') updateBlobfish(n, dt);
+    else if(n.type==='seadragon') updateSeaDragon(n, dt);
+    else if(n.type==='oarfish') updateOarfish(n, dt);
+    else if(n.type==='manatee') updateManatee(n, dt);
+    else if(n.type==='prismkoi') updatePrismKoi(n, dt);
+    else if(n.type==='cloudray') updateCloudray(n, dt);
+    else if(n.type==='starwhale') updateStarwhale(n, dt);
+    else if(n.type==='whale') updateWhale(n, dt);
+    else if(n.type==='dolphin') updateDolphin(n, dt);
+    else if(n.type==='swordfish') updateSwordfish(n, dt);
+    else if(n.type==='nautilus') updateNautilus(n, dt);
+    else if(n.type==='seasnake') updateSeaSnake(n, dt);
+    else if(n.type==='sunfish') updateSunfish(n, dt);
+    else if(n.type==='dumbooctopus') updateDumboOctopus(n, dt);
+    else if(n.type==='goblinshark') updateGoblinShark(n, dt);
+  }
+
+  npcs = npcs.filter(n=>{
+    const tooFar = dist2(n.x,n.y,player.x,player.y) > DESPAWN_RADIUS*DESPAWN_RADIUS;
+    const expired = n.type==='shark' && n.life <= 0;
+    if(tooFar || expired){ destroyNpc(n); return false; }
+    return true;
   });
 
-  ws.on('close', ()=>{
-    const c = (perIp.get(ip) || 1) - 1;
-    if(c <= 0) perIp.delete(ip); else perIp.set(ip, c);
-    if(p.joined && players.delete(p.id)) broadcast({ t:'leave', id:p.id, n:players.size });
+  for(const s of schools) updateSchool(s, dt);
+  for(let i=schools.length-1;i>=0;i--){
+    if(dist2(schools[i].x,schools[i].y,player.x,player.y) > DESPAWN_RADIUS*DESPAWN_RADIUS){
+      destroySchool(schools[i]);
+      schools.splice(i,1);
+    }
+  }
+}
+
+/* ============================= SEAFLOOR & DECOR ============================= */
+
+function drawSeafloorAndDecor(time){
+  terrainG.clear();
+
+  // cover exactly what the camera sees (incl. look-ahead offset), plus margin, all the way to the screen bottom
+  // snapped to a fixed 24px grid (STRIP) so strip seams, ripples and the crest line stay put in world space
+  // instead of crawling along with the camera (that crawl is what showed up as flickering vertical lines)
+  const left = Math.floor((-world.x - 100)/24)*24;
+  const right = Math.ceil((-world.x + app.screen.width + 100)/24)*24;
+  const bottom = -world.y + app.screen.height + 200;
+  const cellSize = 70;
+  const firstCell = Math.floor(left/cellSize) - 1;
+  const lastCell = Math.floor(right/cellSize) + 1;
+
+  // layered sand: each band follows the floor contour but sits deeper and darker, down past the screen edge.
+  // drawn in thin strips so the colour can change smoothly from one biome to the next
+  const BAND_OFFS = [0, 34, 96, 210, 420], STRIP = 24;
+  const bandEdge = (wx, off)=> floorY(wx) + off + Math.sin(wx*0.013 + off)*off*0.06;
+  BAND_OFFS.forEach((off, bi)=>{
+    for(let wx = left; wx < right; wx += STRIP){
+      const x2 = wx + STRIP;
+      terrainG.beginFill(Bio.bandColor(wx + STRIP/2, bi));
+      terrainG.drawPolygon([wx - 1, bandEdge(wx - 1, off), x2 + 1.5, bandEdge(x2 + 1.5, off), x2 + 1.5, bottom, wx - 1, bottom]);
+      terrainG.endFill();
+    }
   });
-  ws.on('error', ()=>{});
+  const spark = Bio.sparkleAt(player.x);
+
+  // sand ripples + pebbles (wireframe accents)
+  terrainG.lineStyle(1, spark, 0.12);
+  for(let r=1;r<=3;r++){
+    terrainG.moveTo(left, floorY(left) + r*14);
+    for(let wx = left; wx <= right; wx += 24){
+      terrainG.lineTo(wx, floorY(wx) + r*14 + Math.sin(wx*0.045 + r*2.1)*2.5);
+    }
+  }
+  terrainG.lineStyle(0);
+  for(let i=firstCell; i<=lastCell; i++){
+    for(let k=0;k<3;k++){
+      const px = i*cellSize + hash(i*5.17 + k*1.9)*cellSize;
+      const py = floorY(px) + 8 + hash(i*2.3 + k*7.1)*70;
+      terrainG.beginFill(spark, 0.14);
+      terrainG.drawCircle(px, py, 1 + hash(i + k*3.3)*1.6);
+      terrainG.endFill();
+    }
+  }
+
+  // bright crest line
+  terrainG.lineStyle(1.5, spark, 0.4);
+  terrainG.moveTo(left, floorY(left));
+  for(let wx = left; wx <= right; wx += 24){
+    terrainG.lineTo(wx, floorY(wx));
+  }
+
+  for(let i=firstCell; i<=lastCell; i++){
+    const h = hash(i*1.7+0.3);
+    const wx = i*cellSize + hash(i*2.91)*30;
+    const fy = floorY(wx);
+
+    const kind = Bio.decorFor(Bio.at(wx), h);          // what grows here depends on the biome
+    if(kind) Bio.drawDecor(terrainG, kind, wx, fy, hash(i*3.3 + 0.7), time);
+  }
+}
+
+function hslToHex(h,s,l){
+  h = (h%360)/360;
+  let r,g,b;
+  if(s===0){ r=g=b=l; }
+  else{
+    const hue2rgb=(p,q,t)=>{
+      if(t<0) t+=1; if(t>1) t-=1;
+      if(t<1/6) return p+(q-p)*6*t;
+      if(t<1/2) return q;
+      if(t<2/3) return p+(q-p)*(2/3-t)*6;
+      return p;
+    };
+    const q = l<0.5 ? l*(1+s) : l+s-l*s;
+    const p = 2*l-q;
+    r = hue2rgb(p,q,h+1/3);
+    g = hue2rgb(p,q,h);
+    b = hue2rgb(p,q,h-1/3);
+  }
+  return rgbToHex([Math.round(r*255),Math.round(g*255),Math.round(b*255)]);
+}
+
+/* ============================= SURFACE LINE ============================= */
+
+function drawSurfaceLine(time){
+  surfaceG.clear();
+  const left = player.x - app.screen.width/2 - 50;
+  const right = player.x + app.screen.width/2 + 50;
+  if(SURFACE_Y < player.y - app.screen.height/2 - 50 || SURFACE_Y > player.y + app.screen.height/2 + 50) return;
+
+  surfaceG.lineStyle(2, 0xffffff, 0.35);
+  surfaceG.moveTo(left, SURFACE_Y + Math.sin(left*0.02 + time*0.002)*4);
+  for(let wx=left; wx<=right; wx+=16){
+    surfaceG.lineTo(wx, SURFACE_Y + Math.sin(wx*0.02 + time*0.002)*4);
+  }
+}
+
+/* ============================= WATER OVERLAY EFFECTS ============================= */
+
+function drawWaterOverlay(time){
+  waterOverlayG.clear();
+  const W = app.screen.width;
+  const H = app.screen.height;
+  const surfY = world.y;          // where the surface sits on screen
+  if(surfY > H) return;           // surface is below the view: nothing to light
+  const top = Math.max(0, surfY);
+
+  // Caustic light patterns just under the surface
+  if(player.y < 800){
+    const causticAlpha = Math.max(0, 0.08 - Math.max(player.y,0)/10000);
+    waterOverlayG.lineStyle(1, 0xffffff, causticAlpha);
+    for(let i=0; i<12; i++){
+      const cx = ((i*120 + time*0.02 + player.x*0.1) % (W+200)) - 100;
+      const cy = top + 20 + Math.sin(time*0.001 + i)*30;
+      waterOverlayG.moveTo(cx, cy);
+      waterOverlayG.quadraticCurveTo(cx+40, cy+20, cx+80, cy-10);
+      waterOverlayG.quadraticCurveTo(cx+120, cy-30, cx+160, cy+10);
+    }
+  }
+
+  // Subtle light rays from the surface
+  if(player.y < 400){
+    const rayAlpha = Math.max(0, 0.035 - Math.max(player.y,0)/8000) * (0.4 + 0.6*getDaylight(time));
+    waterOverlayG.beginFill(0xffffff, rayAlpha);
+    for(let i=0; i<5; i++){
+      const rx = ((i*200 + time*0.008) % (W+300)) - 150;
+      waterOverlayG.moveTo(rx, top);
+      waterOverlayG.lineTo(rx+30, top);
+      waterOverlayG.lineTo(rx+80, H);
+      waterOverlayG.lineTo(rx+20, H);
+      waterOverlayG.closePath();
+    }
+    waterOverlayG.endFill();
+  }
+}
+
+/* ============================= SKY + WATER BACKGROUND ============================= */
+
+const waterBg = document.getElementById('water-bg');
+
+// Sky is drawn in PIXI (so its lower edge can follow the wave line);
+// everything below the surface is a CSS gradient that darkens with depth.
+function drawSky(now){
+  skyG.clear();
+  const W = app.screen.width, H = app.screen.height;
+  const surfY = world.y;
+  if(surfY <= 0) return;                       // surface is above the screen: no sky visible
+
+  const day = getDaylight(now);
+  const br = options.brightness;
+  // night -> dawn/dusk -> day
+  let zenith, horizon;
+  if(day < 0.5){
+    const t = day/0.5;
+    zenith  = lerpColor(SKY_NIGHT_TOP, SKY_DUSK_TOP, t);
+    horizon = lerpColor(SKY_NIGHT_HOR, SKY_DUSK_HOR, t);
+  } else {
+    const t = (day - 0.5)/0.5;
+    zenith  = lerpColor(SKY_DUSK_TOP, SKY_DAY_TOP, t);
+    horizon = lerpColor(SKY_DUSK_HOR, SKY_DAY_HOR, t);
+  }
+
+  const scale = (c)=> rgbToHex([clamp(Math.round(c[0]*br),0,255), clamp(Math.round(c[1]*br),0,255), clamp(Math.round(c[2]*br),0,255)]);
+
+  const cut = clamp(surfY - 8, 0, H);
+  const BAND = 16;
+  for(let y=0; y<cut; y+=BAND){
+    const alt = clamp((surfY - (y + BAND/2)) / SKY_HEIGHT, 0, 1);
+    skyG.beginFill(scale(lerpColor(horizon, zenith, Math.pow(alt, 0.75))));
+    skyG.drawRect(0, y, W, Math.min(BAND, cut - y) + 1);
+    skyG.endFill();
+  }
+
+  // stars at night
+  if(day < 0.4 && cut > 0){
+    const a = (0.4 - day)/0.4;
+    for(let i=0;i<44;i++){
+      const tw = 0.55 + 0.45*Math.sin(now*0.002 + i*1.7);
+      skyG.beginFill(0xffffff, a*tw*0.85);
+      skyG.drawCircle(hash(i*1.3)*W, hash(i*2.7+5)*cut, 0.6 + hash(i*4.1)*1.1);
+      skyG.endFill();
+    }
+  }
+
+  // last strip: follow the wavy surface line exactly
+  if(cut < H){
+    const left = player.x - W/2;
+    const pts = [0, cut, W, cut];
+    const steps = Math.ceil(W/16);
+    for(let i=0; i<=steps; i++){
+      const sx = W - W*(i/steps);
+      const wy = surfY + Math.sin((left + sx)*0.02 + now*0.002)*4;
+      pts.push(sx, Math.min(H+2, Math.max(cut, wy)));
+    }
+    skyG.beginFill(scale(horizon));
+    skyG.drawPolygon(pts);
+    skyG.endFill();
+  }
+}
+
+function updateWaterBackground(now){
+  const H = app.screen.height;
+  const surfY = world.y;
+  const startY = Math.max(0, surfY);            // first screen row that is water
+
+  const day = getDaylight(now);
+  const br = (0.42 + 0.58*day) * options.brightness * Bio.lightAt(player.x);
+  const tint = Bio.tintAt(player.x);              // each biome colours the water differently
+
+  const stops = [];
+  let firstColor = null;
+  const N = 4;
+  for(let i=0;i<=N;i++){
+    const sy = startY + (H - startY)*(i/N);
+    const depthFrac = clamp((player.y + (sy - H/2)) / 8000, 0, 1);
+    const c = colorAtDepthFraction(depthFrac);
+    const adj = [clamp(Math.round(c[0]*br*tint[0]),0,255), clamp(Math.round(c[1]*br*tint[1]),0,255), clamp(Math.round(c[2]*br*tint[2]),0,255)];
+    if(i === 0) firstColor = rgbToCss(adj);
+    stops.push(`${rgbToCss(adj)} ${sy.toFixed(1)}px`);
+  }
+  if(startY > 0) stops.unshift(`${firstColor} 0px`);   // solid water colour behind the sky strip
+
+  waterBg.style.background = `linear-gradient(to bottom, ${stops.join(', ')})`;
+}
+
+/* ============================= DAY/NIGHT CLOCK ============================= */
+
+const clockEl = document.getElementById('daynight-clock');
+
+// Fast 24-hour clock: 120 seconds real time = 24 game hours
+function updateClock(){
+  const cycleTime = getCycleTime(performance.now());
+  // cycleTime is 0..1, map to 0..24 hours
+  const totalHours = cycleTime * 24;
+  const hours = Math.floor(totalHours);
+  const minutes = Math.floor((totalHours - hours) * 60);
+  const timeStr = `${hours.toString().padStart(2,'0')}:${minutes.toString().padStart(2,'0')}`;
+
+  clockEl.textContent = timeStr;
+}
+
+/* ============================= OPTIONS ============================= */
+
+const options = {
+  volume: 1.0,
+  brightness: 1.0,
+  difficulty: 'normal',
+  showHints: true
+};
+
+/* ============================= AUDIO ============================= */
+
+let audioCtx = null;
+let masterGain = null;
+let droneNodes = null;
+
+function ensureAudio(){
+  if(audioCtx) return;
+  try{
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = options.volume * 0.5;
+    masterGain.connect(audioCtx.destination);
+    startDrone();
+  }catch(err){
+    audioCtx = null;
+  }
+}
+
+function startDrone(){
+  if(!audioCtx || droneNodes) return;
+  const osc1 = audioCtx.createOscillator();
+  const osc2 = audioCtx.createOscillator();
+  const droneGain = audioCtx.createGain();
+  osc1.type = 'sine'; osc1.frequency.value = 55;
+  osc2.type = 'sine'; osc2.frequency.value = 82.5;
+  droneGain.gain.value = 0.18;
+  osc1.connect(droneGain);
+  osc2.connect(droneGain);
+  droneGain.connect(masterGain);
+  osc1.start(); osc2.start();
+  droneNodes = { osc1, osc2, droneGain };
+}
+
+function playBlip(){
+  if(!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(rand(500,900), t);
+  osc.frequency.exponentialRampToValueAtTime(rand(900,1400), t+0.12);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.22, t+0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+0.18);
+  osc.connect(g); g.connect(masterGain);
+  osc.start(t); osc.stop(t+0.2);
+}
+
+function playLevelUp(){
+  if(!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  [523.25, 659.25, 783.99, 1046.5].forEach((f, i)=>{
+    const t = t0 + i*0.09;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(f, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.2, t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+0.28);
+    osc.connect(g); g.connect(masterGain);
+    osc.start(t); osc.stop(t+0.3);
+  });
+}
+
+function setVolume(v){
+  options.volume = clamp(v, 0, 1);
+  if(masterGain) masterGain.gain.value = options.volume * 0.5;
+  if(lotanMusicAudio) lotanMusicAudio.volume = options.volume;
+}
+
+// CODE-ONLY music setting for Dungeon 35.
+// To replace the track, edit this URL in game.js to a direct MP3/OGG/WAV URL
+// (or a local path such as "assets/lotan-final-boss.mp3"). No in-game setting is exposed.
+const LOTAN_BOSS_MUSIC_URL = '';
+let lotanMusicAudio = null;
+function stopLotanMusic(){
+  if(lotanMusicAudio){ lotanMusicAudio.pause(); lotanMusicAudio.currentTime=0; lotanMusicAudio=null; }
+}
+function startLotanMusic(){
+  stopLotanMusic();
+  if(!LOTAN_BOSS_MUSIC_URL) return;
+  try{
+    lotanMusicAudio = new Audio(LOTAN_BOSS_MUSIC_URL);
+    lotanMusicAudio.loop = true;
+    lotanMusicAudio.volume = options.volume;
+    const playPromise = lotanMusicAudio.play();
+    if(playPromise && playPromise.catch) playPromise.catch(()=>{});
+  }catch(err){ lotanMusicAudio=null; }
+}
+window.MoceanFinalMusicStart = startLotanMusic;
+window.MoceanFinalMusicStop = stopLotanMusic;
+
+/* ============================= TITLE SCREEN / OPTIONS WIRING ============================= */
+
+const titleScreenEl = document.getElementById('title-screen');
+const optionsScreenEl = document.getElementById('options-screen');
+const playButtonEl = document.getElementById('play-button');
+const optionsButtonEl = document.getElementById('options-button');
+const backButtonEl = document.getElementById('back-button');
+const volumeSliderEl = document.getElementById('volume-slider');
+const brightnessSliderEl = document.getElementById('brightness-slider');
+const difficultySelectEl = document.getElementById('difficulty-select');
+const showHintsCheckboxEl = document.getElementById('show-hints-checkbox');
+
+// the difficulty choice is remembered between visits
+const DIFF_KEY = 'mocean.difficulty.v1';
+try{
+  const saved = localStorage.getItem(DIFF_KEY);
+  if(saved === 'peaceful' || saved === 'normal' || saved === 'hard'){ options.difficulty = saved; difficultySelectEl.value = saved; }
+}catch(err){}
+
+const pregameHideTargets = ['hud','instructions','touch-controls'];
+function setPregameVisible(visible){
+  for(const id of pregameHideTargets){
+    const el = document.getElementById(id);
+    if(!el) continue;
+    el.classList.toggle('pregame-hidden', !visible);
+  }
+}
+setPregameVisible(false);
+
+let optionsOpenedFromTitle = true;
+
+function openOptions(fromTitle){
+  optionsOpenedFromTitle = fromTitle;
+  optionsScreenEl.classList.remove('screen-hidden');
+  optionsScreenEl.classList.add('screen-active');
+  if(fromTitle){
+    titleScreenEl.classList.add('screen-hidden');
+    titleScreenEl.classList.remove('screen-active');
+  }
+}
+
+function closeOptions(){
+  optionsScreenEl.classList.add('screen-hidden');
+  optionsScreenEl.classList.remove('screen-active');
+  if(optionsOpenedFromTitle){
+    titleScreenEl.classList.remove('screen-hidden');
+    titleScreenEl.classList.add('screen-active');
+  }
+}
+
+function startGame(){
+  if(gameStarted) return;
+  gameStarted = true;
+  ensureAudio();
+  titleScreenEl.classList.add('screen-hidden');
+  titleScreenEl.classList.remove('screen-active');
+  playerG.visible = true;
+  setPregameVisible(true);
+  mp.start();
+  if(options.showHints){
+    setTimeout(hideInstructions, 10000);
+  } else {
+    hideInstructions();
+  }
+}
+
+playButtonEl.addEventListener('click', startGame);
+optionsButtonEl.addEventListener('click', ()=> openOptions(true));
+backButtonEl.addEventListener('click', closeOptions);
+
+volumeSliderEl.addEventListener('input', (e)=>{
+  setVolume(e.target.value/100);
+});
+brightnessSliderEl.addEventListener('input', (e)=>{
+  options.brightness = clamp(e.target.value/100, 0.5, 1.5);
+});
+difficultySelectEl.addEventListener('change', (e)=>{
+  options.difficulty = e.target.value;
+  try{ localStorage.setItem(DIFF_KEY, options.difficulty); }catch(err){}
+  if(options.difficulty === 'peaceful'){
+    for(let i=npcs.length-1;i>=0;i--){
+      if(npcs[i].type === 'shark'){ destroyNpc(npcs[i]); npcs.splice(i,1); }
+    }
+  }
+});
+showHintsCheckboxEl.addEventListener('change', (e)=>{
+  options.showHints = e.target.checked;
+  if(!options.showHints) hideInstructions();
 });
 
-// position updates go out in batches, 15 times a second, only for players that moved
-setInterval(()=>{
-  const rows = [];
-  for(const p of players.values()) if(p.dirty){ rows.push([p.id].concat(p.s)); p.dirty = false; }
-  if(!rows.length) return;
-  for(const p of players.values()){
-    const mine = rows.filter(r => r[0] !== p.id);
-    if(mine.length) send(p.ws, { t:'snap', p:mine });
-  }
-}, 66);
+playerG.visible = false;
 
-// drop connections that stopped answering, and sockets that never said hello
-setInterval(()=>{
-  for(const ws of wss.clients){
-    if(ws.alive === false){ ws.terminate(); continue; }
-    ws.alive = false; try{ ws.ping(); }catch(err){}
-  }
-}, 20000);
+/* ============================= COMMAND PROMPT ============================= */
 
-server.listen(PORT, HOST, ()=> console.log(`mocean server on http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`));
-process.on('SIGINT', ()=>{ wss.close(); server.close(()=> process.exit(0)); setTimeout(()=> process.exit(0), 500); });
+const commandPromptEl = document.getElementById('command-prompt');
+const commandOutputEl = document.getElementById('command-output');
+const commandInputEl = document.getElementById('command-input');
+
+function printLine(text, cls){
+  const line = document.createElement('div');
+  line.className = 'line' + (cls ? ' '+cls : '');
+  line.textContent = text;
+  commandOutputEl.appendChild(line);
+  commandOutputEl.scrollTop = commandOutputEl.scrollHeight;
+}
+
+function openCommandPrompt(prefill){
+  commandOpen = true;
+  commandPromptEl.classList.remove('command-hidden');
+  commandInputEl.value = prefill || '';
+  commandInputEl.focus();
+  keys.up = keys.down = keys.left = keys.right = keys.space = false;
+}
+
+function closeCommandPrompt(){
+  commandOpen = false;
+  commandPromptEl.classList.add('command-hidden');
+  commandInputEl.blur();
+}
+
+commandInputEl.addEventListener('keydown', (e)=>{
+  e.stopPropagation();
+  if(e.key === 'Enter'){
+    const raw = commandInputEl.value.trim();
+    commandInputEl.value = '';
+    if(raw.length === 0 || raw === '/'){ closeCommandPrompt(); return; }
+    if(raw.charAt(0) === '/'){
+      printLine('> ' + (/^\/devkey\s/i.test(raw) ? '/devkey ****' : raw), 'echo');   // never show the dev key on screen
+      runCommand(raw);
+    } else {                                                  // no leading "/": it's chat
+      const errs = mp.chat(raw);
+      for(const [text, cls] of errs) printLine(text, cls);
+      if(!errs.length) closeCommandPrompt();                  // sent: back to swimming
+    }
+  } else if(e.key === 'Escape'){
+    closeCommandPrompt();
+  }
+});
+
+// clicking or tapping anywhere outside the prompt closes it
+document.addEventListener('pointerdown', (e)=>{
+  if(commandOpen && !commandPromptEl.contains(e.target)) closeCommandPrompt();
+}, true);
+
+const COMMAND_LIST = [
+  'help','clear','depth','teleport','tp','speed','spawn','clearcreatures',
+  'time','weather','flip','coords','fact','8ball','roll','coinflip','rename',
+  'level','xp','resetprogress','dungeon','cave','biome','sky','inverted','space','sun','moon',
+  'name','nick','who','tags','mp','devkey'
+];
+
+// only the player named "iamdev" may use these (see mp.isDev; the server reserves that name)
+const DEV_ONLY = ['xp','dungeon'];
+
+const FUN_FACTS = [
+  'The blue whale\'s heart alone can weigh as much as a small car.',
+  'Octopuses have three hearts and blue blood.',
+  'The deepest part of the ocean is the Mariana Trench, nearly 11,000m down.',
+  'A group of jellyfish is called a smack.',
+  'Sharks have been around longer than trees.',
+  'Some fish can change sex during their lifetime.',
+  'The ocean produces over half of the world\'s oxygen.',
+  'Seahorses are famously the species where males carry the young.',
+  'Pufferfish can inflate to several times their normal size in seconds.',
+  'Starfish don\'t have brains or blood.'
+];
+
+const MAGIC_8BALL = [
+  'It is certain.','Without a doubt.','Yes, definitely.','You may rely on it.',
+  'Ask again later.','Cannot predict now.','Concentrate and ask again.',
+  'Don\'t count on it.','My reply is no.','Outlook not so good.','Very doubtful.'
+];
+
+const SPAWNABLE = {
+  jellyfish: (x,y)=> spawnJellyfish(x,y),
+  crab: (x)=> spawnCrab(x),
+  turtle: (x,y)=> spawnTurtle(x,y),
+  octopus: (x,y)=> spawnOctopus(x,y),
+  seahorse: (x,y)=> spawnSeahorse(x,y),
+  stingray: (x,y)=> spawnStingray(x,y),
+  eel: (x,y)=> spawnEel(x,y),
+  starfish: (x)=> spawnStarfish(x),
+  seahub: (x,y)=> spawnSeaUrchin(x,y),
+  pufferfish: (x,y)=> spawnPufferfish(x,y),
+  shark: (x,y)=> spawnShark(x,y),
+  school: (x,y)=> { spawnSchool(x,y); return null; },
+  mantaray: (x,y)=> spawnMantaRay(x,y),
+  squid: (x,y)=> spawnSquid(x,y),
+  anglerfish: (x,y)=> spawnAnglerfish(x,y),
+  narwhal: (x,y)=> spawnNarwhal(x,y),
+  hammerhead: (x,y)=> spawnHammerhead(x,y),
+  isopod: (x,y)=> spawnIsopod(x,y),
+  lionfish: (x,y)=> spawnLionfish(x,y),
+  cuttlefish: (x,y)=> spawnCuttlefish(x,y),
+  parrotfish: (x,y)=> spawnParrotfish(x,y),
+  blobfish: (x,y)=> spawnBlobfish(x,y),
+  seadragon: (x,y)=> spawnSeaDragon(x,y),
+  oarfish: (x,y)=> spawnOarfish(x,y),
+  manatee: (x,y)=> spawnManatee(x,y),
+  whale: (x,y)=> spawnWhale(x,y),
+  dolphin: (x,y)=> spawnDolphin(x,y),
+  swordfish: (x,y)=> spawnSwordfish(x,y),
+  nautilus: (x,y)=> spawnNautilus(x,y),
+  seasnake: (x,y)=> spawnSeaSnake(x,y),
+  sunfish: (x,y)=> spawnSunfish(x,y),
+  dumbooctopus: (x,y)=> spawnDumboOctopus(x,y),
+  goblinshark: (x,y)=> spawnGoblinShark(x,y)
+};
+
+function runCommand(raw){
+  const parts = raw.split(/\s+/);
+  const cmd = parts[0].toLowerCase().replace(/^\//,'');
+  const args = parts.slice(1);
+  playBlip();
+
+  if((cmd === 'xp' || cmd === 'dungeon' || cmd === 'cave') && !mp.isDev()){
+    printLine('Only the player named "iamdev" can use /' + cmd + '.', 'err');
+    return;
+  }
+
+  switch(cmd){
+    case 'help': {
+      printLine('Available commands:', 'info');
+      printLine(COMMAND_LIST.filter(c => !DEV_ONLY.includes(c) || mp.isDev()).join(', '), 'info');
+      printLine('Type without a leading / to chat online. Press / for commands, Enter to chat.', 'info');
+      break;
+    }
+    case 'dungeon':
+    case 'cave': {
+      for(const [text, cls] of dungeons.command(args)) printLine(text, cls);
+      break;
+    }
+    case 'sky': case 'inverted': case 'space': case 'sun': case 'moon': {
+      if((cmd === 'sky' || cmd === 'inverted' || cmd === 'space') && dungeons.active) dungeons.command(['exit']);
+      for(const [text, cls] of sky.command(cmd, args)) printLine(text, cls);
+      break;
+    }
+    case 'biome': case 'biomes': {
+      const n = parseInt(args[0], 10);
+      if(n >= 1 && n <= Bio.list.length){
+        if(dungeons.active) dungeons.command(['exit']);
+        const b = Bio.list[n-1];
+        player.x = b.start === -Infinity ? 0 : b.start + 900; player.y = 700; player.vx = player.vy = 0;
+        printLine(`Teleported to the ${b.name}.`, 'ok');
+      } else {
+        printLine('Biomes, west to east (/biome <1-' + Bio.list.length + '> teleports):', 'info');
+        Bio.list.forEach((b, i)=> printLine(`${i+1}. ${b.name}: caves ${b.caves[0]}-${b.caves[1]}, ` +
+          (b.start === -Infinity ? 'everything west of the first cave' : `starts ${Math.round(b.start/8)} m east`), Bio.at(player.x) === b ? 'ok' : 'info'));
+      }
+      break;
+    }
+    case 'clear': {
+      commandOutputEl.innerHTML = '';
+      break;
+    }
+    case 'depth': {
+      if(player.y <= INV_SURFACE_Y) printLine(`Upturned depth: ${Math.round((INV_SURFACE_Y - player.y)/8)}m (swim up to go deeper)`, 'ok');
+      else if(player.y < SURFACE_Y) printLine(`Altitude: ${Math.round((SURFACE_Y - player.y)/8)}m`, 'ok');
+      else printLine(`Current depth: ${Math.max(0, Math.round((player.y - SURFACE_Y)/8))}m`, 'ok');
+      break;
+    }
+    case 'coords': {
+      printLine(`x=${Math.round(player.x)} y=${Math.round(player.y)}`, 'ok');
+      break;
+    }
+    case 'teleport': case 'tp': {
+      if(args[0]==='surface'){
+        player.y = SURFACE_Y + 10; player.vy = 0;
+        printLine('Teleported to the surface.', 'ok');
+      } else if(args[0]==='seafloor' || args[0]==='floor'){
+        player.y = floorY(player.x) - 60; player.vy = 0;
+        printLine('Teleported to the seafloor.', 'ok');
+      } else if(args.length>=2 && !isNaN(+args[0]) && !isNaN(+args[1])){
+        player.x = +args[0]; player.y = +args[1]; player.vx=0; player.vy=0;
+        printLine(`Teleported to (${args[0]}, ${args[1]}).`, 'ok');
+      } else {
+        printLine('Usage: /tp surface | /tp seafloor | /tp <x> <y>', 'err');
+      }
+      break;
+    }
+    case 'speed': {
+      const v = parseFloat(args[0]);
+      if(isNaN(v) || v<=0){ printLine('Usage: /speed <number, e.g. 9>', 'err'); break; }
+      player.maxSpeed = clamp(v, 1, 40);
+      printLine(`Max speed set to ${player.maxSpeed}.`, 'ok');
+      break;
+    }
+    case 'spawn': {
+      const what = (args[0]||'').toLowerCase();
+      const fn = SPAWNABLE[what];
+      if(!fn){
+        printLine('Spawnable: ' + Object.keys(SPAWNABLE).join(', '), 'err');
+        break;
+      }
+      const sx = player.x + rand(-160,160);
+      const sy = clamp(player.y + rand(-100,100), WORLD_TOP_MARGIN+40, 7500);
+      const n = fn(sx, sy);
+      if(n) npcs.push(n);
+      printLine(`Spawned a ${what} nearby.`, 'fun');
+      break;
+    }
+    case 'clearcreatures': {
+      for(const n of npcs) destroyNpc(n);
+      npcs = [];
+      for(const s of schools) destroySchool(s);
+      schools.length = 0;
+      printLine('Cleared all creatures.', 'ok');
+      break;
+    }
+    case 'time': {
+      printLine(getDaylight(performance.now()) >= 0.5 ? 'It is currently day.' : 'It is currently night.', 'info');
+      break;
+    }
+    case 'weather': {
+      const opts = ['Calm currents.','A gentle drift today.','Sun rays piercing the surface.','Murky and still.','Bubbles rising steadily.'];
+      printLine(opts[randi(0,opts.length-1)], 'fun');
+      break;
+    }
+    case 'flip': {
+      player.flipping = true;
+      player.flipProgress = 0;
+      player.flipDir = Math.random()<0.5 ? 1 : -1;
+      player.flipCounts = false;      // debug flips don't award XP
+      printLine('Flip!', 'fun');
+      break;
+    }
+    case 'fact': {
+      printLine(FUN_FACTS[randi(0,FUN_FACTS.length-1)], 'fun');
+      break;
+    }
+    case '8ball': {
+      if(args.length===0){ printLine('Ask the 8-ball a question, e.g. /8ball will I find a shark?', 'err'); break; }
+      printLine(MAGIC_8BALL[randi(0,MAGIC_8BALL.length-1)], 'fun');
+      break;
+    }
+    case 'roll': {
+      const sides = parseInt(args[0]) || 6;
+      printLine(`You rolled a ${randi(1,Math.max(2,sides))} (d${sides}).`, 'fun');
+      break;
+    }
+    case 'coinflip': {
+      printLine(Math.random()<0.5 ? 'Heads!' : 'Tails!', 'fun');
+      break;
+    }
+    case 'level': {
+      printLine(`Level ${progress.level} - ${progress.xp} / ${xpNeeded(progress.level)} XP`, 'ok');
+      break;
+    }
+    case 'xp': {
+      const v = parseInt(args[0]);
+      if(isNaN(v) || v <= 0){ printLine('Usage: /xp <amount>', 'err'); break; }
+      addXP(v);
+      printLine(`Gave ${v} XP.`, 'ok');
+      break;
+    }
+    case 'resetprogress': {
+      resetProgress();
+      printLine('Level and XP reset.', 'ok');
+      break;
+    }
+    case 'rename': {
+      if(args.length===0){ printLine('Usage: /rename <new name>', 'err'); break; }
+      const name = args.join(' ').slice(0,24);
+      document.getElementById('title-text').textContent = name;
+      document.getElementById('title-text').setAttribute('data-text', name);
+      printLine(`Renamed the game to "${name}". (cosmetic, title screen only)`, 'fun');
+      break;
+    }
+    case 'name': case 'nick': case 'who': case 'players': case 'online':
+    case 'tags': case 'mp': case 'multiplayer': case 'devkey': {
+      for(const [text, cls] of mp.command(cmd, args)) printLine(text, cls);
+      break;
+    }
+    default: {
+      printLine(`Unknown command: ${cmd}. Type /help for a list.`, 'err');
+    }
+  }
+}
+
+window.addEventListener('keydown', (e)=>{
+  if(commandOpen && e.key === 'Escape'){
+    closeCommandPrompt();
+  }
+});
+
+/* ============================= HUD ============================= */
+
+const depthValEl = document.getElementById('depthVal');
+
+const biomeLabelEl = document.createElement('div');
+biomeLabelEl.id = 'biome-label';
+document.getElementById('hud').insertBefore(biomeLabelEl, document.getElementById('daynight-clock'));
+const biomeBannerEl = document.createElement('div');
+biomeBannerEl.id = 'biome-banner';
+biomeBannerEl.innerHTML = '<div class="bb-small">Entering</div><div class="bb-big"></div>';
+document.body.appendChild(biomeBannerEl);
+let lastPlace = Bio.at(player.x).name;
+const hudLabelEl = document.querySelector('#hud .label');
+
+function updateHUD(){
+  let hudLabel = 'Depth', hudVal;
+  if(dungeons.active) hudVal = dungeons.depth();
+  else if(player.y <= SPACE_Y){ hudLabel = 'Altitude'; hudVal = Math.round((SURFACE_Y - player.y)/8); }
+  else if(player.y <= INV_SURFACE_Y){ hudLabel = 'Depth (upturned)'; hudVal = Math.round((INV_SURFACE_Y - player.y)/8); }
+  else if(player.y < SURFACE_Y){ hudLabel = 'Altitude'; hudVal = Math.round((SURFACE_Y - player.y)/8); }
+  else hudVal = Math.max(0, Math.round((player.y - SURFACE_Y)/8));
+  depthValEl.textContent = hudVal;
+  if(hudLabelEl && hudLabelEl.textContent !== hudLabel) hudLabelEl.textContent = hudLabel;
+  if(dungeons.active){ biomeLabelEl.textContent = dungeons._state ? dungeons._state.d.name : ''; return; }
+  const b = Bio.at(player.x);
+  const zone = sky.zoneAt(player.y, player.x);                       // sky zones & the upturned sea
+  const place = (zone && zone !== 'Sea Breeze') ? zone : b.name;     // (jumping through Sea Breeze shouldn't spam banners)
+  if(biomeLabelEl.textContent !== place) biomeLabelEl.textContent = place;
+  if(place !== lastPlace){
+    lastPlace = place;
+    if(gameStarted){
+      biomeBannerEl.children[1].textContent = place;
+      biomeBannerEl.classList.remove('show'); void biomeBannerEl.offsetWidth; biomeBannerEl.classList.add('show');
+    }
+  }
+}
+
+/* ============================= CAVES & ABILITIES (see dungeons.js) ============================= */
+
+const water = MoceanWater({
+  app, world, player, view, creaturesLayer, getDaylight, rand, clamp,
+  inCave: ()=> dungeons.active,
+  isWet: ()=> isWet(player.y), waterDepth: waterDepthPx,
+  isInverted: ()=> player.y <= INV_SURFACE_Y, invSurfaceY: INV_SURFACE_Y
+});
+
+const dungeons = MoceanDungeons({
+  app, world, player, keys, view, rand, randi, clamp, lerpAngle, floorY,
+  terrainG, bubblesG, playerG, PLAYER_COLORS, SHARK_COLORS, drawFishShape,
+  addXP, popText, burstBubbles, playBlip,
+  getLevel: ()=> progress.level,
+  getDifficulty: ()=> options.difficulty,
+  mouseScreen, showHoverLabel, hideHoverLabel,
+  isStarted: ()=> gameStarted,
+  // hide / show the open-ocean layers while the player is inside a cave
+  hideWhenInside(inside){
+    for(const o of [skyG, terrainG, creaturesLayer, surfaceG, waterOverlayG]) o.visible = !inside;
+  }
+});
+
+/* ============================= SKY, SUN & MOON, UPTURNED SEA (see sky.js) ============================= */
+
+function getMouth(){
+  const formSize = player.size * dungeons.look().size;
+  return {
+    x: player.x + Math.cos(player.displayAngle)*formSize*0.55,
+    y: player.y + Math.sin(player.displayAngle)*formSize*0.55,
+    reach: formSize*0.85*dungeons.eatMul()
+  };
+}
+
+const sky = MoceanSky({
+  app, world, player, creaturesLayer, skyG, Bio, getDaylight, getCycleTime, rand, randi, clamp, lerp, lerpAngle,
+  floorY, inCave: ()=> dungeons.active, drawFishShape, attachHoverLabel, burstBubbles,
+  eaten: eatenEffect, getMouth, getBrightness: ()=> options.brightness,
+  isStarted: ()=> gameStarted, ROUND
+});
+
+/* ============================= ONLINE MULTIPLAYER (see multiplayer.js) ============================= */
+
+const mp = MoceanMultiplayer({
+  app, world, player, view, creaturesLayer, drawFishShape, lerpAngle, clamp,
+  look: ()=> dungeons.look(),
+  inCave: ()=> dungeons.active,
+  isStarted: ()=> gameStarted,
+  isCommandOpen: ()=> commandOpen,
+  print: (text, cls)=> printLine(text, cls)
+});
+
+/* ============================= MAIN LOOP ============================= */
+
+let bubbleSpawnTimer = 0;
+
+(function seedWorld(){
+  for(let i=0;i<12;i++){
+    const x = player.x + rand(-900,900);
+    const y = clamp(player.y + rand(-500,500), 200, 7500);
+    const r = Math.random();
+    if(r<0.25) spawnSchool(x,y);
+    else if(r<0.38) npcs.push(spawnJellyfish(x,y));
+    else if(r<0.48) npcs.push(spawnCrab(x));
+    else if(r<0.58) npcs.push(spawnOctopus(x,y));
+    else if(r<0.66) npcs.push(spawnSeahorse(x,y));
+    else if(r<0.74) npcs.push(spawnStingray(x,y));
+    else if(r<0.82) npcs.push(spawnStarfish(x));
+    else if(r<0.90) npcs.push(spawnSeaUrchin(x,y));
+    else npcs.push(spawnPufferfish(x,y));
+  }
+  for(let i=0;i<2;i++) npcs.push(spawnWhale(player.x + rand(-900,900), clamp(player.y + rand(-500,500), 800, 3000)));
+  for(let i=0;i<3;i++) npcs.push(spawnDolphin(player.x + rand(-900,900), clamp(player.y + rand(-500,500), 400, 2500)));
+  for(let i=0;i<2;i++) npcs.push(spawnSwordfish(player.x + rand(-900,900), clamp(player.y + rand(-500,500), 600, 3500)));
+  for(let i=0;i<2;i++) npcs.push(spawnNautilus(player.x + rand(-900,900), clamp(player.y + rand(-500,500), 2000, 7500)));
+  for(let i=0;i<2;i++) npcs.push(spawnSeaSnake(player.x + rand(-900,900), clamp(player.y + rand(-500,500), 1500, 7500)));
+  for(let i=0;i<2;i++) npcs.push(spawnSunfish(player.x + rand(-900,900), clamp(player.y + rand(-500,500), 600, 3000)));
+  for(let i=0;i<2;i++) npcs.push(spawnDumboOctopus(player.x + rand(-900,900), clamp(player.y + rand(-500,500), 5000, 7500)));
+  for(let i=0;i<2;i++) npcs.push(spawnGoblinShark(player.x + rand(-900,900), clamp(player.y + rand(-500,500), 4000, 7500)));
+})();
+
+function positionPlayerGraphic(){
+  playerG.x = app.screen.width/2;
+  playerG.y = app.screen.height/2;
+}
+window.addEventListener('resize', positionPlayerGraphic);
+positionPlayerGraphic();
+
+app.ticker.add((rawDt)=>{
+  if(dungeons.menuOpen) return;           // the level-up upgrade menu pauses the whole game
+  const dt = Math.min(rawDt, 2.5);        // a hitch (tab switch, lag spike) never tunnels through physics
+  updateTouchInput();
+  const speed = updatePlayer(dt);
+  if(!dungeons.active){
+    updateNPCs(dt);
+    if(player.y > -1200) trySpawn(dt);       // no sea creatures spawn while you're high in the sky
+    checkEating();
+  }
+  if(lochNessCd > 0) lochNessCd -= dt;
+  updateLochNess(dt);
+  if(!dungeons.active && !lochNessEncounterStarted && !lochNessDefeatedThisRun && lochNessCd <= 0){
+    // trigger when the fish touches the monster's drawn body (the glowing ellipse), not just a small circle at its centre
+    const ex=(player.x-(lochX+30*lochFace))/390, ey=(player.y-(lochY+8))/120;
+    if(ex*ex+ey*ey < 1 && gameStarted){
+      lochNessEncounterStarted = true;
+      // come back out just outside the monster, on the side the player arrived from
+      const side = player.x < lochX ? -1 : 1;
+      const ret = { x: lochX + 30*lochFace + side*700, y: lochY };
+      if(dungeons.startLochNessEncounter(ret)) lochNessG.visible = false;
+      else lochNessEncounterStarted = false;
+    }
+  }
+  drawLochNess(performance.now());
+  dungeons.update(dt);
+  if(!dungeons.active && lochNessEncounterStarted){
+    lochNessEncounterStarted=false;
+    lochNessCd = 300;                       // ~5 s grace so you can't be instantly re-grabbed
+    if(window.MoceanLochNessDefeated) lochNessDefeatedThisRun=true;
+  }
+
+  bubbleSpawnTimer -= dt;
+  if(bubbleSpawnTimer <= 0){
+    bubbleSpawnTimer = rand(7,15);
+    spawnBubble(false);
+  }
+  if(!player.inAir && speed > 1.2 && Math.random() < 0.05*dt*Math.min(speed/3, 2)) spawnBubble(true);
+  spawnVentBubbles(dt);
+  updateBubbles(dt);
+  updateSplashes(dt);
+
+  // camera: eases ahead of the fish so fast swimming reveals more of what's coming
+  const lookX = clamp(player.vx*5, -48, 48), lookY = clamp(player.vy*4, -34, 34);
+  const camEase = 1 - Math.pow(0.9, dt);
+  view.ox += (-lookX - view.ox) * camEase;
+  view.oy += (-lookY - view.oy) * camEase;
+  world.x = -(player.x - app.screen.width/2) + view.ox;
+  world.y = -(player.y - app.screen.height/2) - player.bob + view.oy;
+
+  const now = performance.now();
+  if(!dungeons.active) drawSeafloorAndDecor(now);
+  redrawBubbles();
+  redrawSplashes();
+  if(!dungeons.active){
+    drawSurfaceLine(now);
+  }
+
+  playerG.x = app.screen.width/2 + view.ox;
+  playerG.y = app.screen.height/2 + player.bob + view.oy;
+  playerG.rotation = player.flipping
+    ? player.displayAngle + player.flipProgress*Math.PI*2*player.flipDir
+    : player.displayAngle;
+  const look = dungeons.look();
+  drawFishShape(playerG, player.size*look.size*(1 + player.chomp*0.18), look.colors, player.tailPhase, speed/player.maxSpeed, player.bank, player.displayAngle);
+
+  if(!dungeons.active){
+    drawSky(now);
+    updateWaterBackground(now);
+  }
+  water.update(dt, now, speed);
+  sky.update(dt, now);
+  mp.update(dt, now);
+  refreshOceanHover();
+  updateHUD();
+  updateDebugDisplay();
+  updateClock();
+});
+
+})();
