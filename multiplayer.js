@@ -18,6 +18,11 @@
 const KEY = 'mocean.mp.v1';
 const SEND_MS = 90;                       // position updates, ~11 per second
 
+// Where your multiplayer server lives, e.g. 'wss://mocean-server.onrender.com'.
+// GitHub Pages only hosts static files, so deploy server.js somewhere that runs Node and put its address here.
+// (Players can still override it in Options -> Server.) Leave empty if the game is served by server.js itself.
+const DEFAULT_SERVER = 'wss://mocean-server.onrender.com';
+
 function cleanName(s){ return String(s || '').replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 16); }
 function cleanText(s){ return String(s || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140); }
 function hueOf(name){ let h = 0; for(let i = 0; i < name.length; i++) h = (h*31 + name.charCodeAt(i)) % 360; return h; }
@@ -35,7 +40,10 @@ global.MoceanMultiplayer = function(ctx){
 
   // "host:port", "http://host", "ws://host" and "wss://host" all work. Empty = the server that served this page.
   function bases(){
-    let s = String(cfg.server || '').trim() || global.MOCEAN_SERVER || (/^https?:$/.test(location.protocol) ? location.origin : 'http://localhost:3000');
+    const onPages = /\.github\.io$/i.test(location.hostname);        // a static host: there is no server at this origin
+    let s = String(cfg.server || '').trim() || DEFAULT_SERVER || global.MOCEAN_SERVER ||
+            (/^https?:$/.test(location.protocol) && !onPages ? location.origin : onPages ? '' : 'http://localhost:3000');
+    if(!s) return null;
     if(!/^[a-z]+:\/\//i.test(s)) s = (location.protocol === 'https:' ? 'https://' : 'http://') + s;
     s = s.replace(/\/+$/, '');
     const http = s.replace(/^ws/i, 'http');
@@ -183,7 +191,9 @@ global.MoceanMultiplayer = function(ctx){
   function connect(){
     if(ws || !cfg.enabled || !started) return;
     clearTimeout(retryTimer);
-    try{ ws = new WebSocket(bases().ws); }catch(err){ ws = null; scheduleRetry(); return; }
+    const b = bases();
+    if(!b) return;                                                  // no server configured: stay solo
+    try{ ws = new WebSocket(b.ws); }catch(err){ ws = null; scheduleRetry(); return; }
     const sock = ws;
     sock.onopen = ()=>{ retries = 0; send({ t:'join', name:cfg.name }); };
     sock.onmessage = (ev)=>{
@@ -262,7 +272,9 @@ global.MoceanMultiplayer = function(ctx){
     try{
       const c = new AbortController();
       timer = setTimeout(()=> c.abort(), 4000);
-      const r = await fetch(bases().http + '/online', { cache:'no-store', signal:c.signal });
+      const b = bases();
+      if(!b){ setTitleCount(null); return; }
+      const r = await fetch(b.http + '/online', { cache:'no-store', signal:c.signal });
       const j = await r.json();
       setTitleCount(j && Number.isFinite(j.online) ? j.online : null);
     }catch(err){ setTitleCount(null); }
@@ -396,13 +408,13 @@ global.MoceanMultiplayer = function(ctx){
         const a = (args[0] || 'status').toLowerCase();
         if(a === 'on' || a === 'off'){ setEnabled(a === 'on'); return [['Multiplayer ' + a + '.', 'ok']]; }
         if(a === 'server'){
-          if(!args[1]) return [['Server: ' + bases().http + (cfg.server ? '' : ' (default)') + '. Usage: /mp server <host:port | reset>', 'info']];
+          if(!args[1]) return [['Server: ' + (bases() || { http:'none configured' }).http + (cfg.server ? '' : ' (default)') + '. Usage: /mp server <host:port | reset>', 'info']];
           setServer(args[1] === 'reset' ? '' : args[1]);
-          return [['Server set to ' + bases().http + '.', 'ok']];
+          return [['Server set to ' + (bases() || { http:'none' }).http + '.', 'ok']];
         }
         return [
           ['Multiplayer: ' + (cfg.enabled ? (connected ? 'connected' : 'trying to connect') : 'off') + ' \u00B7 ' + online + ' online', connected ? 'ok' : 'info'],
-          ['Server: ' + bases().http + ' \u00B7 Name: ' + cfg.name + ' \u00B7 Tags: ' + (cfg.tags ? 'on' : 'off'), 'info'],
+          ['Server: ' + (bases() || { http:'none configured' }).http + ' \u00B7 Name: ' + cfg.name + ' \u00B7 Tags: ' + (cfg.tags ? 'on' : 'off'), 'info'],
           ['Commands: /say /name /who /tags /mp on|off|server', 'info']
         ];
       }
