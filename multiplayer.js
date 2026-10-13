@@ -32,7 +32,7 @@ global.MoceanMultiplayer = function(ctx){
 
   /* ------------------------------------------------------------ settings */
 
-  const cfg = { enabled:true, name:'', tags:true, server:'' };
+  const cfg = { enabled:true, name:'', tags:true, server:'', devKey:'' };
   try{ Object.assign(cfg, JSON.parse(localStorage.getItem(KEY) || '{}')); }catch(err){}
   cfg.name = cleanName(cfg.name) || ('Fish' + (1000 + Math.floor(Math.random()*9000)));
   const saveCfg = ()=>{ try{ localStorage.setItem(KEY, JSON.stringify(cfg)); }catch(err){} };
@@ -53,7 +53,7 @@ global.MoceanMultiplayer = function(ctx){
   /* --------------------------------------------------------------- state */
 
   let started = false, ws = null, connected = false, myId = null, online = 0;
-  let retryTimer = null, retries = 0, lastSend = 0, lastKey = '';
+  let retryTimer = null, retries = 0, lastSend = 0, lastKey = '', lastPing = 0, ping = null;
   const remotes = new Map();
 
   /* ------------------------------------------------------------ DOM bits */
@@ -195,7 +195,7 @@ global.MoceanMultiplayer = function(ctx){
     if(!b) return;                                                  // no server configured: stay solo
     try{ ws = new WebSocket(b.ws); }catch(err){ ws = null; scheduleRetry(); return; }
     const sock = ws;
-    sock.onopen = ()=>{ retries = 0; send({ t:'join', name:cfg.name }); };
+    sock.onopen = ()=>{ retries = 0; send({ t:'join', name:cfg.name, key:cfg.devKey }); };
     sock.onmessage = (ev)=>{
       let m; try{ m = JSON.parse(ev.data); }catch(err){ return; }
       handle(m);
@@ -203,7 +203,7 @@ global.MoceanMultiplayer = function(ctx){
     sock.onclose = ()=>{
       if(ws !== sock) return;
       const was = connected;
-      ws = null; connected = false; myId = null; clearRemotes();
+      ws = null; connected = false; myId = null; ping = null; clearRemotes();
       if(was) sysLine('Disconnected from the server.');
       scheduleRetry();
     };
@@ -218,7 +218,7 @@ global.MoceanMultiplayer = function(ctx){
 
   function disconnect(){
     clearTimeout(retryTimer);
-    const sock = ws; ws = null; connected = false; myId = null;
+    const sock = ws; ws = null; connected = false; myId = null; ping = null;
     if(sock){ try{ sock.close(); }catch(err){} }
     clearRemotes();
   }
@@ -231,7 +231,7 @@ global.MoceanMultiplayer = function(ctx){
         if(m.name && m.name !== cfg.name){ cfg.name = m.name; saveCfg(); if(nameEl) nameEl.value = m.name; me.tag.text = m.name; }
         for(const p of (m.players || [])) addRemote(p);
         lastKey = '';                                     // force a first position update
-        sysLine('Connected \u2014 ' + online + (online === 1 ? ' player' : ' players') + ' online. Chat with /say <message>.');
+        sysLine('Connected \u2014 ' + online + (online === 1 ? ' player' : ' players') + ' online. Press Enter to chat.');
         break;
       case 'join':
         online = m.n | 0; addRemote(m.p);
@@ -245,7 +245,9 @@ global.MoceanMultiplayer = function(ctx){
       }
       case 'name': {
         const r = remotes.get(m.id), nm = cleanName(m.name);
-        if(r && nm){ sysLine(r.name + ' is now known as ' + nm + '.'); setRemoteName(r, nm); }
+        if(m.id === myId && nm){                          // the server corrected our own name
+          cfg.name = nm; saveCfg(); me.tag.text = nm; if(nameEl) nameEl.value = nm;
+        } else if(r && nm){ sysLine(r.name + ' is now known as ' + nm + '.'); setRemoteName(r, nm); }
         break;
       }
       case 'snap':
@@ -260,6 +262,7 @@ global.MoceanMultiplayer = function(ctx){
         if(who) showBubble(who, text, now);
         break;
       }
+      case 'pong': { const rtt = performance.now() - m.ts; if(rtt >= 0 && rtt < 60000) ping = ping === null ? Math.round(rtt) : Math.round(ping*0.6 + rtt*0.4); break; }
       case 'sys': ctx.print(String(m.text || ''), 'info'); feedAdd('', String(m.text || ''), 'sys'); break;
     }
   }
@@ -308,7 +311,7 @@ global.MoceanMultiplayer = function(ctx){
     cfg.name = n; saveCfg();
     me.tag.text = n;
     if(nameEl && document.activeElement !== nameEl) nameEl.value = n;
-    if(connected) send({ t:'name', name:n });
+    if(connected) send({ t:'name', name:n, key:cfg.devKey });
   }
   function setServer(s){
     cfg.server = String(s || '').trim(); saveCfg();
@@ -336,6 +339,8 @@ global.MoceanMultiplayer = function(ctx){
 
     remoteLayer.visible = connected && !inCave;
     if(!connected) return;
+
+    if(now - lastPing >= 2000){ lastPing = now; send({ t:'ping', ts:now }); }
 
     // send our state
     if(ctx.isStarted() && now - lastSend >= SEND_MS){
@@ -378,14 +383,6 @@ global.MoceanMultiplayer = function(ctx){
   // returns [[text, class], ...] like dungeons.command()
   function command(cmd, args){
     switch(cmd){
-      case 'say': case 'chat': case 'msg': {
-        const text = cleanText(args.join(' '));
-        if(!text) return [['Usage: /say <message>', 'err']];
-        if(!cfg.enabled) return [['Multiplayer is off. Turn it on with /mp on.', 'err']];
-        if(!connected) return [['Not connected to a server, so nobody can hear you. (/mp status)', 'err']];
-        send({ t:'chat', text });
-        return [];
-      }
       case 'name': case 'nick': {
         if(!args.length) return [['Your name is "' + cfg.name + '". Change it with /name <new name>.', 'info']];
         const n = cleanName(args.join(' '));
@@ -397,6 +394,13 @@ global.MoceanMultiplayer = function(ctx){
         if(!connected) return [['Not connected. (/mp status)', 'err']];
         const names = [cfg.name + ' (you)'].concat(Array.from(remotes.values()).map(r => r.name));
         return [[online + ' online: ' + names.join(', '), 'info']];
+      }
+      case 'devkey': {
+        const k = args.join(' ').trim();
+        if(!k) return [['Usage: /devkey <key> | /devkey clear', 'info']];
+        cfg.devKey = k === 'clear' ? '' : k; saveCfg();
+        if(started && cfg.enabled){ disconnect(); retries = 0; connect(); }
+        return [[k === 'clear' ? 'Dev key cleared.' : 'Dev key saved.', 'ok']];
       }
       case 'tags': {
         const a = (args[0] || '').toLowerCase();
@@ -415,15 +419,27 @@ global.MoceanMultiplayer = function(ctx){
         return [
           ['Multiplayer: ' + (cfg.enabled ? (connected ? 'connected' : 'trying to connect') : 'off') + ' \u00B7 ' + online + ' online', connected ? 'ok' : 'info'],
           ['Server: ' + (bases() || { http:'none configured' }).http + ' \u00B7 Name: ' + cfg.name + ' \u00B7 Tags: ' + (cfg.tags ? 'on' : 'off'), 'info'],
-          ['Commands: /say /name /who /tags /mp on|off|server', 'info']
+          ['Commands: /name /who /tags /mp on|off|server. Type without a / to chat.', 'info']
         ];
       }
     }
     return null;
   }
 
+  // plain text typed into the prompt: returns error lines, or [] when the message was sent
+  function chat(raw){
+    const text = cleanText(raw);
+    if(!text) return [];
+    if(!cfg.enabled) return [['Multiplayer is off, so nobody can hear you. Turn it on with /mp on. (Commands start with /)', 'err']];
+    if(!connected) return [['Not connected to a server, so nobody can hear you. (/mp status \u00B7 commands start with /)', 'err']];
+    send({ t:'chat', text });
+    return [];
+  }
+
   return {
-    update, command,
+    update, command, chat,
+    isDev: ()=> cfg.name.trim().toLowerCase() === 'iamdev',
+    get ping(){ return connected ? ping : null; },
     start(){ started = true; if(cfg.enabled) connect(); },
     get connected(){ return connected; }
   };
