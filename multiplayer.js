@@ -126,9 +126,30 @@ global.MoceanMultiplayer = function(ctx){
     return (f(0) << 16) | (f(8) << 8) | f(4);
   }
 
-  const me = { tag: makeTag(cfg.name, 0xffd194), bubble: makeBubble(), bubbleUntil: 0, bubbleAt: 0 };
+  // "typing…" indicator: three bouncing dots on a little dark pill
+  function makeDots(){ const g = new PIXI.Graphics(); g.visible = false; return g; }
+  function drawDots(g, now){
+    g.clear();
+    g.lineStyle(0);
+    g.beginFill(0x07151e, 0.72); g.drawRoundedRect(-17, -9, 34, 18, 9); g.endFill();
+    for(let i = 0; i < 3; i++){
+      const bounce = Math.max(0, Math.sin(now*0.008 - i*0.8));
+      g.beginFill(0xdff6ff, 0.55 + 0.45*bounce);
+      g.drawCircle(-9 + i*9, -bounce*3, 2.6);
+      g.endFill();
+    }
+  }
+  let typing = false;
+  function setTyping(on){
+    on = !!on;
+    if(on === typing) return;
+    typing = on;
+    if(connected) send({ t:'typing', on });
+  }
+
+  const me = { tag: makeTag(cfg.name, 0xffd194), bubble: makeBubble(), dots: makeDots(), bubbleUntil: 0, bubbleAt: 0 };
   me.tag.visible = false;
-  tagLayer.addChild(me.tag, me.bubble);
+  tagLayer.addChild(me.tag, me.bubble, me.dots);
 
   function showBubble(o, text, now){
     o.bubble.text = text;
@@ -152,10 +173,10 @@ global.MoceanMultiplayer = function(ctx){
     const r = {
       id:p.id, name, x:0, y:0, tx:0, ty:0, tvx:0, tvy:0, a:0, ta:0, size:20, c1:0xff9d5c, c2:0xffd194,
       cave:false, ts:0, tp:Math.random()*6, init:false,
-      g:new PIXI.Graphics(), tag:makeTag(name, tagColor(name)), bubble:makeBubble(), bubbleUntil:0, bubbleAt:0
+      g:new PIXI.Graphics(), tag:makeTag(name, tagColor(name)), bubble:makeBubble(), dots:makeDots(), typing:!!p.typing, bubbleUntil:0, bubbleAt:0
     };
     r.g.visible = false; r.tag.visible = false;
-    remoteLayer.addChild(r.g, r.tag, r.bubble);
+    remoteLayer.addChild(r.g, r.tag, r.bubble, r.dots);
     remotes.set(r.id, r);
     if(p.s) applyState(r, p.s);
   }
@@ -163,8 +184,8 @@ global.MoceanMultiplayer = function(ctx){
   function removeRemote(id){
     const r = remotes.get(id);
     if(!r) return;
-    remoteLayer.removeChild(r.g, r.tag, r.bubble);
-    r.g.destroy(); r.tag.destroy(); r.bubble.destroy();
+    remoteLayer.removeChild(r.g, r.tag, r.bubble, r.dots);
+    r.g.destroy(); r.tag.destroy(); r.bubble.destroy(); r.dots.destroy();
     remotes.delete(id);
   }
 
@@ -231,6 +252,7 @@ global.MoceanMultiplayer = function(ctx){
         if(m.name && m.name !== cfg.name){ cfg.name = m.name; saveCfg(); if(nameEl) nameEl.value = m.name; me.tag.text = m.name; }
         for(const p of (m.players || [])) addRemote(p);
         lastKey = '';                                     // force a first position update
+        if(typing) send({ t:'typing', on:true });
         sysLine('Connected \u2014 ' + online + (online === 1 ? ' player' : ' players') + ' online. Press Enter to chat.');
         break;
       case 'join':
@@ -250,6 +272,11 @@ global.MoceanMultiplayer = function(ctx){
         } else if(r && nm){ sysLine(r.name + ' is now known as ' + nm + '.'); setRemoteName(r, nm); }
         break;
       }
+      case 'typing': {
+        const r = remotes.get(m.id);
+        if(r) r.typing = !!m.on;
+        break;
+      }
       case 'snap':
         for(const row of (m.p || [])){ const r = remotes.get(row[0]); if(r) applyState(r, row.slice(1)); }
         break;
@@ -260,6 +287,7 @@ global.MoceanMultiplayer = function(ctx){
         feedAdd(name, text, mine ? 'me' : '');
         const who = mine ? me : remotes.get(m.id);
         if(who) showBubble(who, text, now);
+        if(!mine && who) who.typing = false;
         break;
       }
       case 'pong': { const rtt = performance.now() - m.ts; if(rtt >= 0 && rtt < 60000) ping = ping === null ? Math.round(rtt) : Math.round(ping*0.6 + rtt*0.4); break; }
@@ -336,6 +364,13 @@ global.MoceanMultiplayer = function(ctx){
     me.bubble.y = me.tag.y - (showMine ? 20 : -2);
     me.bubble.visible = me.bubble.visible && !inCave;
     fadeBubble(me, now);
+    const meDots = typing && connected && !inCave && ctx.isStarted();
+    me.dots.visible = meDots;
+    if(meDots){
+      drawDots(me.dots, now);
+      me.dots.x = me.tag.x;
+      me.dots.y = me.bubble.visible ? me.bubble.y - me.bubble.height - 12 : me.tag.y - (showMine ? 40 : 14);
+    }
 
     remoteLayer.visible = connected && !inCave;
     if(!connected) return;
@@ -366,7 +401,7 @@ global.MoceanMultiplayer = function(ctx){
       const sx = r.x + world.x, sy = r.y + world.y, pad = 260;
       const vis = !r.cave && sx > -pad && sx < W + pad && sy > -pad && sy < H + pad;
       r.g.visible = vis; r.tag.visible = vis && cfg.tags;
-      if(!vis){ r.bubble.visible = false; continue; }
+      if(!vis){ r.bubble.visible = false; r.dots.visible = false; continue; }
 
       const frac = clamp(Math.hypot(r.tvx, r.tvy)/9, 0, 1);
       r.tp += (0.2 + frac*0.5)*dt;
@@ -375,6 +410,12 @@ global.MoceanMultiplayer = function(ctx){
       r.tag.x = r.x; r.tag.y = r.y - r.size*1.05 - 14;
       r.bubble.x = r.x; r.bubble.y = r.tag.y - (cfg.tags ? 20 : -2);
       fadeBubble(r, now);
+      r.dots.visible = !!r.typing;
+      if(r.typing){
+        drawDots(r.dots, now);
+        r.dots.x = r.x;
+        r.dots.y = r.bubble.visible ? r.bubble.y - r.bubble.height - 12 : r.tag.y - (cfg.tags ? 40 : 14);
+      }
     }
   }
 
@@ -437,7 +478,7 @@ global.MoceanMultiplayer = function(ctx){
   }
 
   return {
-    update, command, chat,
+    update, command, chat, setTyping,
     isDev: ()=> cfg.name.trim().toLowerCase() === 'iamdev',
     get ping(){ return connected ? ping : null; },
     start(){ started = true; if(cfg.enabled) connect(); },
