@@ -128,12 +128,13 @@ const WORLD_TOP_MARGIN = 40;
 const AIR_HEIGHT = 600;
 const SkyC = MoceanSky.C;                         // altitude map of the sky + upturned sea (see sky.js)
 const INV_SURFACE_Y = SkyC.INV_SURFACE_Y;       // surface of the upside-down sea, far above the waves
-const AIR_TOP = SkyC.INV_FLOOR_Y - 400;
+const SPACE_Y = SkyC.SPACE_Y;                    // top of the upturned sea's rock crust: deep space begins above it
 // the upturned sea's rocky ceiling mirrors the real seafloor's shape
 const invFloorY = (x)=> SkyC.INV_FLOOR_Y - (floorY(x) - 8000);
 // wet = inside the real sea (below y=0) or inside the upturned sea (above its surface)
-function isWet(y){ return y >= SURFACE_Y || y <= INV_SURFACE_Y; }
-function waterDepthPx(){ return player.y >= SURFACE_Y ? player.y : (player.y <= INV_SURFACE_Y ? INV_SURFACE_Y - player.y : 0); }
+// (the shafts through the rock crust, the star rifts, are water-filled too; above the crust is space)
+function isWet(y){ return y >= SURFACE_Y || (y <= INV_SURFACE_Y && y > SPACE_Y); }
+function waterDepthPx(){ return !isWet(player.y) ? 0 : (player.y >= SURFACE_Y ? player.y : INV_SURFACE_Y - player.y); }
 const GRAVITY = 0.15;
 const FLIP_SPEED_THRESHOLD = 0.8;
 
@@ -511,7 +512,7 @@ function tryJump(){
   if(dungeons.active){ dungeons.fire(); return; }   // inside caves the jump key shoots bubbles
   if(!gameStarted || commandOpen) return;
   const upturned = player.y <= INV_SURFACE_Y;     // in the upturned sea "out of the water" is DOWN
-  if(!upturned && player.y < SURFACE_Y) return;   // already airborne
+  if(!isWet(player.y)) return;                    // already airborne (or floating in space)
   if(player.jumpCd > 0) return;
   player.vy = upturned ? JUMP_POWER : -JUMP_POWER;
   player.boost = JUMP_BOOST_FRAMES;
@@ -550,12 +551,16 @@ function updatePlayer(dt){
   const abilitySpeed = dungeons.speedMul();   // shapeshift form + dash
   ax *= abilitySpeed; ay *= abilitySpeed;
   const inAir = !isWet(player.y);
+  const inSpace = inAir && player.y <= SPACE_Y;   // above the rock crust: weightless
+  const prevX = player.x, prevY = player.y;
 
-  if(inAir){
+  if(inSpace){
+    ax *= 0.9; ay *= 0.9;                          // no gravity, no wind: just drift and thrust
+  } else if(inAir){
     ax *= 0.45;
     ay = ay*0.25 + GRAVITY*dungeons.gravityMul();   // Sea Wings glide
-    // thermals: rising wind columns carry you up toward the upturned sea (they ease off near its surface so you can still drop back out)
-    ay -= 0.34*MoceanSky.thermal(player.x)*(1 - 0.45*clamp((-5600 - player.y)/900, 0, 1));
+    // wing power: hold Up in the sky to climb toward the upturned sea (it eases off right under its surface so you can still drop back out)
+    if(gameStarted && keys.up && player.y < SURFACE_Y - 60) ay -= 0.32*(1 - 0.5*clamp((-5600 - player.y)/900, 0, 1));
     ax += MoceanSky.windX(player.y, performance.now())*0.02;
   }
 
@@ -569,7 +574,10 @@ function updatePlayer(dt){
     player.vy += (cur.y * 0.03 + Math.sin(performance.now()*0.0013)*0.004) * dt;
   }
 
-  if(inAir){
+  if(inSpace){
+    const sd = Math.pow(0.987, dt);
+    player.vx *= sd; player.vy *= sd;
+  } else if(inAir){
     const airSp = Math.hypot(player.vx, player.vy);
     const airDrag = Math.pow(1 - 0.0012 - airSp*0.0002, dt);   // quadratic-ish air drag
     player.vx *= airDrag; player.vy *= Math.pow(1 - airSp*0.00012, dt);
@@ -582,7 +590,8 @@ function updatePlayer(dt){
 
   const rawSpeed = Math.hypot(player.vx, player.vy);
   let maxS = player.maxSpeed * abilitySpeed;
-  if(inAir) maxS = player.maxSpeed*1.8;
+  if(inSpace) maxS = player.maxSpeed*1.4*abilitySpeed;
+  else if(inAir) maxS = player.maxSpeed*1.8;
   else if(player.boost > 0) maxS = Math.max(maxS, JUMP_POWER*1.05);
   if(rawSpeed > maxS){
     const k = maxS / rawSpeed;
@@ -592,7 +601,7 @@ function updatePlayer(dt){
   player.x += player.vx * dt;
   player.y += player.vy * dt;
 
-  if(player.y < AIR_TOP){ player.y = AIR_TOP; if(player.vy < 0) player.vy = 0; }
+  // (no lid: deep space goes on forever)
 
   // seafloor collision: rest on the sand and slide along slopes instead of sinking through
   const floorLimit = floorY(player.x) - player.size*dungeons.look().size*0.6;
@@ -605,24 +614,43 @@ function updatePlayer(dt){
     if(slope * player.vx > 0) player.vx *= Math.pow(0.9, dt);   // uphill scrape slows you
   }
 
-  // the upturned sea's ceiling: bonk
-  const ceilLimit = invFloorY(player.x) + player.size*dungeons.look().size*0.6;
-  if(player.y < ceilLimit){
-    player.y = ceilLimit;
-    if(player.vy < -1.5) player.vy *= -0.25; else if(player.vy < 0) player.vy = 0;
+  // the upturned sea's ceiling is a rock crust (SLAB px thick) with star rifts through it
+  {
+    const rr = player.size*dungeons.look().size*0.6;
+    const ceilBase = invFloorY(player.x);
+    const crustTop = SPACE_Y;
+    const inCrust = player.y < ceilBase + rr && player.y > crustTop - rr;
+    if(inCrust && !MoceanSky.inRift(player.x, rr)){
+      if(prevY >= ceilBase){                         // came up from the sea: bonk the ceiling
+        player.y = ceilBase + rr;
+        if(player.vy < -1.5) player.vy *= -0.25; else if(player.vy < 0) player.vy = 0;
+      } else if(prevY <= crustTop){                  // came down from space: land on the crust
+        player.y = crustTop - rr;
+        if(player.vy > 1.5) player.vy *= -0.25; else if(player.vy > 0) player.vy = 0;
+      } else {                                       // inside a rift: its walls hold you in
+        const rb = MoceanSky.riftBounds(prevX);
+        player.x = clamp(player.x, rb.l + rr, rb.r - rr);
+        player.vx *= -0.2;
+      }
+    }
   }
 
   const nowUnderwater = isWet(player.y);
 
   if(wasUnderwater !== nowUnderwater){
-    const upturnedSurface = player.y < INV_SURFACE_Y/2;          // which of the two surfaces did we just cross?
-    spawnSplash(player.x, upturnedSurface ? INV_SURFACE_Y : SURFACE_Y);
+    // which of the three surfaces did we just cross: the sea, the upturned sea's surface, or the top of a star rift?
+    let surfY = SURFACE_Y, outDir = -1;                          // outDir: which way is "out of the water"
+    if(player.y < INV_SURFACE_Y/2){
+      const rift = Math.abs(player.y - SPACE_Y) < Math.abs(player.y - INV_SURFACE_Y);
+      surfY = rift ? SPACE_Y : INV_SURFACE_Y; outDir = rift ? -1 : 1;
+    }
+    spawnSplash(player.x, surfY);
     if(!wasUnderwater){          // diving back in: water resists, spray scales with impact
       const impact = Math.abs(player.vy);
-      burstBubbles(player.x, SURFACE_Y + 10, Math.round(clamp(impact*1.4, 4, 20)));
+      burstBubbles(player.x, surfY - outDir*10, Math.round(clamp(impact*1.4, 4, 20)));
       player.vy *= 0.6; player.vx *= 0.88;
     }
-    const outSpeed = upturnedSurface ? player.vy : -player.vy;   // speed away from the water we just left
+    const outSpeed = outDir*player.vy;                           // speed away from the water we just left
     if(wasUnderwater && !nowUnderwater && outSpeed > FLIP_SPEED_THRESHOLD && !player.flipping){
       player.flipping = true;
       player.flipProgress = 0;
@@ -909,6 +937,7 @@ function redrawBubbles(){
     if(b.pop > 0){                                              // surface pop: ring expands, spits droplets
       const f = b.pop/BUBBLE_POP_FRAMES;
       bubblesG.lineStyle(1.2, 0xffffff, (1 - f)*0.55);
+      bubblesG.moveTo(b.x + b.r*(1 + f*1.1), b.surf);
       bubblesG.drawCircle(b.x, b.surf, b.r*(1 + f*1.1));
       for(let k=0;k<4;k++){
         const a = -Math.PI*(0.15 + k*0.23);
@@ -924,6 +953,9 @@ function redrawBubbles(){
     bubblesG.drawEllipse(b.x, b.y, b.r*(1 + sq), b.r*(1 - sq));
     if(b.r > 2.2){                                              // glint arc + tiny reflection dot
       bubblesG.lineStyle(1, 0xffffff, Math.min(1, a*1.3));
+      // arc() continues from the pen's last position, which drew stray lines to other bubbles (and to popped ones
+      // up at the surface): start a fresh sub-path at the arc's first point
+      bubblesG.moveTo(b.x + Math.cos(Math.PI*1.1)*b.r*0.66, b.y + Math.sin(Math.PI*1.1)*b.r*0.66);
       bubblesG.arc(b.x, b.y, b.r*0.66, Math.PI*1.1, Math.PI*1.55);
       bubblesG.lineStyle(0);
       bubblesG.beginFill(0xffffff, a*0.7);
@@ -1553,6 +1585,7 @@ function startGame(){
   titleScreenEl.classList.remove('screen-active');
   playerG.visible = true;
   setPregameVisible(true);
+  mp.start();
   if(options.showHints){
     setTimeout(hideInstructions, 10000);
   } else {
@@ -1630,7 +1663,8 @@ commandInputEl.addEventListener('keydown', (e)=>{
 const COMMAND_LIST = [
   'help','clear','depth','teleport','tp','speed','spawn','clearcreatures',
   'time','weather','flip','coords','fact','8ball','roll','coinflip','rename',
-  'level','xp','resetprogress','dungeon','cave','biome','sky','inverted','sun','moon'
+  'level','xp','resetprogress','dungeon','cave','biome','sky','inverted','space','sun','moon',
+  'say','chat','msg','name','nick','who','tags','mp'
 ];
 
 const FUN_FACTS = [
@@ -1705,8 +1739,8 @@ function runCommand(raw){
       for(const [text, cls] of dungeons.command(args)) printLine(text, cls);
       break;
     }
-    case 'sky': case 'inverted': case 'sun': case 'moon': {
-      if((cmd === 'sky' || cmd === 'inverted') && dungeons.active) dungeons.command(['exit']);
+    case 'sky': case 'inverted': case 'space': case 'sun': case 'moon': {
+      if((cmd === 'sky' || cmd === 'inverted' || cmd === 'space') && dungeons.active) dungeons.command(['exit']);
       for(const [text, cls] of sky.command(cmd, args)) printLine(text, cls);
       break;
     }
@@ -1841,6 +1875,11 @@ function runCommand(raw){
       printLine(`Renamed the game to "${name}". (cosmetic, title screen only)`, 'fun');
       break;
     }
+    case 'say': case 'chat': case 'msg': case 'name': case 'nick': case 'who': case 'players': case 'online':
+    case 'tags': case 'mp': case 'multiplayer': {
+      for(const [text, cls] of mp.command(cmd, args)) printLine(text, cls);
+      break;
+    }
     default: {
       printLine(`Unknown command: ${cmd}. Type /help for a list.`, 'err');
     }
@@ -1870,6 +1909,7 @@ const hudLabelEl = document.querySelector('#hud .label');
 function updateHUD(){
   let hudLabel = 'Depth', hudVal;
   if(dungeons.active) hudVal = dungeons.depth();
+  else if(player.y <= SPACE_Y){ hudLabel = 'Altitude'; hudVal = Math.round((SURFACE_Y - player.y)/8); }
   else if(player.y <= INV_SURFACE_Y){ hudLabel = 'Depth (upturned)'; hudVal = Math.round((INV_SURFACE_Y - player.y)/8); }
   else if(player.y < SURFACE_Y){ hudLabel = 'Altitude'; hudVal = Math.round((SURFACE_Y - player.y)/8); }
   else hudVal = Math.max(0, Math.round((player.y - SURFACE_Y)/8));
@@ -1928,6 +1968,17 @@ const sky = MoceanSky({
   floorY, inCave: ()=> dungeons.active, drawFishShape, attachHoverLabel, burstBubbles,
   eaten: eatenEffect, getMouth, getBrightness: ()=> options.brightness,
   isStarted: ()=> gameStarted, ROUND
+});
+
+/* ============================= ONLINE MULTIPLAYER (see multiplayer.js) ============================= */
+
+const mp = MoceanMultiplayer({
+  app, world, player, view, creaturesLayer, drawFishShape, lerpAngle, clamp,
+  look: ()=> dungeons.look(),
+  inCave: ()=> dungeons.active,
+  isStarted: ()=> gameStarted,
+  isCommandOpen: ()=> commandOpen,
+  print: (text, cls)=> printLine(text, cls)
 });
 
 /* ============================= MAIN LOOP ============================= */
@@ -2038,6 +2089,7 @@ app.ticker.add((rawDt)=>{
   }
   water.update(dt, now, speed);
   sky.update(dt, now);
+  mp.update(dt, now);
   refreshOceanHover();
   updateHUD();
   updateDebugDisplay();
