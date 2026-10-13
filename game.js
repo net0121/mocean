@@ -228,6 +228,8 @@ function updateDebugDisplay(){
     Y: ${Math.round(player.y)}<br>
     VX: ${player.vx.toFixed(2)}<br>
     VY: ${player.vy.toFixed(2)}<br>
+    FPS: ${Math.round(app.ticker.FPS)}<br>
+    Ping: ${mp.ping === null ? '--' : mp.ping + ' ms'}<br>
     Depth: ${Math.max(0, Math.round((player.y - SURFACE_Y)/8))}m<br>
     <br>
     Time: ${timeOfDay}<br>
@@ -259,9 +261,9 @@ function scheduleHideInstructions(ms){
 
 window.addEventListener('keydown', (e)=>{
   if(commandOpen) return;
-  if(gameStarted && e.key === '/'){
+  if(gameStarted && (e.key === '/' || e.key === 'Enter')){
     e.preventDefault();
-    openCommandPrompt();
+    if(!e.repeat) openCommandPrompt(e.key === '/' ? '/' : '');   // "/" starts a command, Enter starts a chat message
     return;
   }
   if(!gameStarted) return;
@@ -1633,10 +1635,10 @@ function printLine(text, cls){
   commandOutputEl.scrollTop = commandOutputEl.scrollHeight;
 }
 
-function openCommandPrompt(){
+function openCommandPrompt(prefill){
   commandOpen = true;
   commandPromptEl.classList.remove('command-hidden');
-  commandInputEl.value = '';
+  commandInputEl.value = prefill || '';
   commandInputEl.focus();
   keys.up = keys.down = keys.left = keys.right = keys.space = false;
 }
@@ -1652,20 +1654,34 @@ commandInputEl.addEventListener('keydown', (e)=>{
   if(e.key === 'Enter'){
     const raw = commandInputEl.value.trim();
     commandInputEl.value = '';
-    if(raw.length === 0) return;
-    printLine('> ' + raw, 'echo');
-    runCommand(raw);
+    if(raw.length === 0 || raw === '/'){ closeCommandPrompt(); return; }
+    if(raw.charAt(0) === '/'){
+      printLine('> ' + (/^\/devkey\s/i.test(raw) ? '/devkey ****' : raw), 'echo');   // never show the dev key on screen
+      runCommand(raw);
+    } else {                                                  // no leading "/": it's chat
+      const errs = mp.chat(raw);
+      for(const [text, cls] of errs) printLine(text, cls);
+      if(!errs.length) closeCommandPrompt();                  // sent: back to swimming
+    }
   } else if(e.key === 'Escape'){
     closeCommandPrompt();
   }
 });
 
+// clicking or tapping anywhere outside the prompt closes it
+document.addEventListener('pointerdown', (e)=>{
+  if(commandOpen && !commandPromptEl.contains(e.target)) closeCommandPrompt();
+}, true);
+
 const COMMAND_LIST = [
   'help','clear','depth','teleport','tp','speed','spawn','clearcreatures',
   'time','weather','flip','coords','fact','8ball','roll','coinflip','rename',
   'level','xp','resetprogress','dungeon','cave','biome','sky','inverted','space','sun','moon',
-  'say','chat','msg','name','nick','who','tags','mp'
+  'name','nick','who','tags','mp','devkey'
 ];
+
+// only the player named "iamdev" may use these (see mp.isDev; the server reserves that name)
+const DEV_ONLY = ['xp','dungeon'];
 
 const FUN_FACTS = [
   'The blue whale\'s heart alone can weigh as much as a small car.',
@@ -1728,10 +1744,16 @@ function runCommand(raw){
   const args = parts.slice(1);
   playBlip();
 
+  if((cmd === 'xp' || cmd === 'dungeon' || cmd === 'cave') && !mp.isDev()){
+    printLine('Only the player named "iamdev" can use /' + cmd + '.', 'err');
+    return;
+  }
+
   switch(cmd){
     case 'help': {
       printLine('Available commands:', 'info');
-      printLine(COMMAND_LIST.join(', '), 'info');
+      printLine(COMMAND_LIST.filter(c => !DEV_ONLY.includes(c) || mp.isDev()).join(', '), 'info');
+      printLine('Type without a leading / to chat online. Press / for commands, Enter to chat.', 'info');
       break;
     }
     case 'dungeon':
@@ -1875,8 +1897,8 @@ function runCommand(raw){
       printLine(`Renamed the game to "${name}". (cosmetic, title screen only)`, 'fun');
       break;
     }
-    case 'say': case 'chat': case 'msg': case 'name': case 'nick': case 'who': case 'players': case 'online':
-    case 'tags': case 'mp': case 'multiplayer': {
+    case 'name': case 'nick': case 'who': case 'players': case 'online':
+    case 'tags': case 'mp': case 'multiplayer': case 'devkey': {
       for(const [text, cls] of mp.command(cmd, args)) printLine(text, cls);
       break;
     }
