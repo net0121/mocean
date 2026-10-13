@@ -754,4 +754,24 @@ html,body{
 #chat-feed .feed-line.sys{ color:rgba(223,246,255,0.7); font-style:italic; }
 #chat-feed .feed-name{ font-weight:600; }
 @keyframes feedLife{ 0%,85%{ opacity:1; } 100%{ opacity:0; } }
-@media (hover:none) and (pointer:coarse){ #chat-feed{ bottom:96px; } }
+@media (hover:none) and (pointer:coarse){ #chat-feed{ bottom:150px; } }
+
+/* Chat button (touch devices only) */
+#chat-button{
+  position:fixed;
+  left:max(14px, env(safe-area-inset-left));
+  bottom:calc(max(14px, env(safe-area-inset-bottom)) + 54px);
+  display:none;
+  padding:0 16px; height:44px;
+  border-radius:22px;
+  border:1px solid rgba(223,246,255,0.4);
+  background:rgba(2,16,25,0.6);
+  color:var(--foam);
+  font-family:'Roboto Mono', monospace; font-size:13px; letter-spacing:0.5px;
+  z-index:119;
+  touch-action:manipulation; user-select:none;
+  -webkit-tap-highlight-color:transparent;
+  transition:opacity 0.6s ease;
+}
+#chat-button:active{ background:rgba(255,157,92,0.5); }
+@media (pointer:coarse){ #chat-button{ display:block; } }
