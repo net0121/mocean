@@ -31,6 +31,13 @@
     19  Charybdis Maw         * Charybdis, the Devouring Maw    Pearl Cannon (X)
     20  Leviathan's Throne    * Leviathan, the Sea Serpent King Tsunami (M)
 
+   Caves 21-30 float inside the UPTURNED sea high above the clouds; caves 31-35 drift in DEEP SPACE, beyond the
+   upturned sea's rock crust (swim up through a glowing star rift to get there). Some of them grant new abilities:
+     21  Abyssal Gauntlet       Quad Shot (4)    4-way bubble fan
+     22  The Drowned Archive    Overdrive (H)    a much longer, faster boost than Tidal Dash (works everywhere)
+     27  Throne of Broken Tides Nova Burst (K)   big shockwave: 5 damage + erases enemy shots
+     31  Tempest Engine         Octa Shot (J)    bubbles fly out in 8 directions
+
    (* = Mythical Sea Legend: a bigger arena, a longer health bar, spiral attacks
    and a boss that gets steadily angrier as it loses health.)
 
@@ -109,21 +116,21 @@ global.MoceanDungeons = function(ctx){
       { kind:'charybdis', name:'Charybdis, the Devouring Maw', r:84, legend:true } ],
     [20,"Leviathan's Throne", 15,10,10, 0x3a2a6a,0x0e0a22,0xffd36a, 0,   'tsunami',    ['eel','angler','jelly','crab','puffer'],
       { kind:'leviathan', name:'Leviathan, the Sea Serpent King', r:92, legend:true } ],
-    [21,'Abyssal Gauntlet',16,10,12,0x252b48,0x090d1b,0x8aa8ff,-6800,'cannon',['kraken','eel','angler'],{kind:'sky_crown',name:'Astraeus, the Void Crown',r:96,legend:true,pal:[0x8aa8ff,0xe5f0ff]}],
-    [22,'The Drowned Archive',17,11,13,0x34475a,0x0b1722,0x9be8ff,-7120,'glow',['ghostship','jelly','urchin'],{kind:'sky_archivist',name:'Mnemora, the Star Archivist',r:102,legend:true,pal:[0x9be8ff,0xffffff]}],
+    [21,'Abyssal Gauntlet',16,10,12,0x252b48,0x090d1b,0x8aa8ff,-6800,'quad',['kraken','eel','angler'],{kind:'sky_crown',name:'Astraeus, the Void Crown',r:96,legend:true,pal:[0x8aa8ff,0xe5f0ff]}],
+    [22,'The Drowned Archive',17,11,13,0x34475a,0x0b1722,0x9be8ff,-7120,'surge',['ghostship','jelly','urchin'],{kind:'sky_archivist',name:'Mnemora, the Star Archivist',r:102,legend:true,pal:[0x9be8ff,0xffffff]}],
     [23,'Black Coral Cathedral',18,11,14,0x462c56,0x14091c,0xff8fdb,-7440,'shield',['siren','angler','crab'],{kind:'sky_seraph',name:'Vespera, Coral Seraph',r:100,legend:true,pal:[0xff8fdb,0xffd7f2]}],
     [24,'The Furnace Below',19,12,15,0x623321,0x1c0a05,0xff713b,-7760,'riptide',['dragon','eel','puffer'],{kind:'sky_solar',name:'Heliophage, the Sun-Eater',r:108,legend:true,pal:[0xff713b,0xffdf75]}],
     [25,'Glacier of Teeth',20,12,16,0x4a6377,0x101c29,0xc9f5ff,-8080,'ripple',['shark','turtle','urchin'],{kind:'sky_frost',name:'Nix-Null, the Frozen Comet',r:112,legend:true,pal:[0xc9f5ff,0xffffff]}],
     [26,'The Starless Maze',21,13,17,0x32264f,0x0d0718,0xc7a4ff,-8400,'ghost',['hydra','jelly','angler'],{kind:'sky_wraith',name:'The Umbral Choir',r:112,legend:true,pal:[0xc7a4ff,0x6540a8]}],
-    [27,'Throne of Broken Tides',22,13,18,0x254e62,0x07151e,0x65e6ff,-8720,'tsunami',['serpent','kraken','eel'],{kind:'sky_titan',name:'Pelagor, Sky-Tide Titan',r:118,legend:true,pal:[0x65e6ff,0xd9ffff]}],
+    [27,'Throne of Broken Tides',22,13,18,0x254e62,0x07151e,0x65e6ff,-8720,'nova',['serpent','kraken','eel'],{kind:'sky_titan',name:'Pelagor, Sky-Tide Titan',r:118,legend:true,pal:[0x65e6ff,0xd9ffff]}],
     [28,'The Hollow Moon',23,14,19,0x4b3e72,0x110d24,0xe2c7ff,-9040,'cannon',['ray','siren','angler'],{kind:'sky_moon',name:'Lunaclysm, the Hollow Moon',r:120,legend:true,pal:[0xe2c7ff,0xffffff]}],
     [29,'Grave of the First Sea',24,14,20,0x343a49,0x080b13,0xc4d6e8,-9360,'shield',['ghostship','charybdis','kraken'],{kind:'sky_reaper',name:'The First Reaper',r:124,legend:true,pal:[0xc4d6e8,0x7d8aa8]}],
     [30,'The Endless Pressure',25,15,21,0x1d3c50,0x050d15,0x55cfff,-9680,'riptide',['leviathan','serpent','hydra'],{kind:'sky_maelstrom',name:'Vortexion, the Living Maelstrom',r:128,legend:true,pal:[0x55cfff,0x9b7cff]}],
-    [31,'Tempest Engine',26,15,22,0x3d405d,0x0c0d1b,0xffc56f,-10000,'tsunami',['dragon','ray','eel'],{kind:'sky_tempest',name:'Keraunos, Storm-Heart',r:132,legend:true,pal:[0xffc56f,0xffffff]}],
-    [32,'The Shattered Current',27,16,23,0x27575a,0x06191a,0x78ffe0,-10320,'cannon',['hydra','kraken','siren'],{kind:'sky_prism',name:'Prismarch, the Shattered Current',r:136,legend:true,pal:[0x78ffe0,0xff8fdb]}],
-    [33,'Abyss Without End',28,16,24,0x2b2145,0x080511,0xd59bff,-10640,'ghost',['charybdis','leviathan','angler'],{kind:'sky_null',name:'Nullith, the Unmaking',r:140,legend:true,pal:[0xd59bff,0x3a245f]}],
-    [34,'The Last Horizon',29,17,25,0x263f68,0x060c20,0x9be8ff,-10960,'tsunami',['serpent','dragon','kraken'],{kind:'sky_horizon',name:'Horizara, World-Ender',r:146,legend:true,pal:[0x9be8ff,0xffd36a]}],
-    [35,'Lotan’s End',31,18,28,0x33205d,0x070313,0xffd36a,-11280,'tsunami',['leviathan','hydra','charybdis','dragon'],{kind:'sky_lotan',name:'Leviathan-Lotan, TRUE Final Boss',r:172,legend:true,finalBoss:true,pal:[0xffd36a,0x9b7cff]}]
+    [31,'Tempest Engine',26,15,22,0x3d405d,0x0c0d1b,0xffc56f,-13300,'octa',['dragon','ray','eel'],{kind:'sky_tempest',name:'Keraunos, Storm-Heart',r:132,legend:true,pal:[0xffc56f,0xffffff]}],
+    [32,'The Shattered Current',27,16,23,0x27575a,0x06191a,0x78ffe0,-14000,'cannon',['hydra','kraken','siren'],{kind:'sky_prism',name:'Prismarch, the Shattered Current',r:136,legend:true,pal:[0x78ffe0,0xff8fdb]}],
+    [33,'Abyss Without End',28,16,24,0x2b2145,0x080511,0xd59bff,-13600,'ghost',['charybdis','leviathan','angler'],{kind:'sky_null',name:'Nullith, the Unmaking',r:140,legend:true,pal:[0xd59bff,0x3a245f]}],
+    [34,'The Last Horizon',29,17,25,0x263f68,0x060c20,0x9be8ff,-14700,'tsunami',['serpent','dragon','kraken'],{kind:'sky_horizon',name:'Horizara, World-Ender',r:146,legend:true,pal:[0x9be8ff,0xffd36a]}],
+    [35,'Lotan’s End',31,18,28,0x33205d,0x070313,0xffd36a,-15700,'tsunami',['leviathan','hydra','charybdis','dragon'],{kind:'sky_lotan',name:'Leviathan-Lotan, TRUE Final Boss',r:172,legend:true,finalBoss:true,pal:[0xffd36a,0x9b7cff]}]
   ];
 
   /* Every cave is strictly bigger than the one before it (maze area), has more guardians, and its boss has
@@ -193,7 +200,13 @@ global.MoceanDungeons = function(ctx){
     riptide: { name:'Riptide',          key:'P',          cd:1500, caveOnly:true,  desc:'Shockwave: 2 damage and a big shove to everything near you' },
     ghost:   { name:'Ghost Current',    key:'N', dur:150, cd:2400, caveOnly:true,  desc:'Swim through cave walls for 2.5 s (not during a boss fight)' },
     cannon:  { name:'Pearl Cannon',     key:'X',          cd:1320, caveOnly:true,  desc:'One giant piercing bubble: 6 damage' },
-    tsunami: { name:'Tsunami',          key:'M',          cd:3600, caveOnly:true,  desc:'A wave wipes enemy shots and hits everything hard' }
+    tsunami: { name:'Tsunami',          key:'M',          cd:3600, caveOnly:true,  desc:'A wave wipes enemy shots and hits everything hard' },
+
+    // caves 21+
+    quad:    { name:'Quad Shot',        key:'4', dur:480, cd:1080, caveOnly:true,  desc:'Bubbles fly in a 4-way fan for 8 s' },
+    surge:   { name:'Overdrive',        key:'H', dur:240, cd:1080,                  desc:'A long, fast boost: 2.6x speed for 4 s, in caves and open water (Tidal Dash is only a quick burst)' },
+    nova:    { name:'Nova Burst',       key:'K',          cd:1500, caveOnly:true,  desc:'A blinding ring: 5 damage to everything near you, and it erases enemy shots' },
+    octa:    { name:'Octa Shot',        key:'J', dur:420, cd:1200, caveOnly:true,  desc:'Bubbles fly out in 8 directions at once for 7 s' }
   };
   const TIMED = Object.keys(ABILITIES).filter(id => ABILITIES[id].cd);   // the 15 new cooldown abilities
 
@@ -397,6 +410,14 @@ global.MoceanDungeons = function(ctx){
   const ccArrow = compass.children[0], ccLabel = compass.children[1], ccWhere = compass.children[2];
 
   // edge-of-screen arrow pointing at the nearest cave you haven't cleared yet
+  // caves 21-30 float in the upturned sea; 31-35 drift in deep space (above the rock crust at y = -12400, see sky.js)
+  const SPACE_CAVE_Y = -12400, INV_SEA_Y = -6500;
+  const placeOf = (d)=> !d.floatY ? 'on the seafloor'
+    : d.floatY < SPACE_CAVE_Y ? `drifting in deep space, ${Math.round(-d.floatY/8)} m up`
+    : d.floatY < INV_SEA_Y ? `floating in the upturned sea, ${Math.round(-d.floatY/8)} m up`
+    : `floats ~${Math.round(d.floatY/8)} m deep`;
+  const regionOf = (d)=> d.floatY && d.floatY < SPACE_CAVE_Y ? 'Deep Space' : d.floatY && d.floatY < INV_SEA_Y ? 'Upturned Sea' : d.biome.name;
+
   function updateCompass(){
     if(!isStarted() || active){ compass.style.display = 'none'; return; }
     const best = nextCave();                              // the lowest-numbered cave you haven't cleared
@@ -411,7 +432,7 @@ global.MoceanDungeons = function(ctx){
     compass.style.top = (H/2 + dy*k) + 'px';
     ccArrow.style.transform = `rotate(${Math.atan2(dy, dx) + Math.PI/2}rad)`;
     ccLabel.textContent = `Next: ${best.id}. ${best.name} · ${Math.round(bd/8)} m`;
-    ccWhere.textContent = best.biome.name + ' · ' + (best.floatY ? `floats ~${Math.round(best.floatY/8)} m deep` : 'on the seafloor');
+    ccWhere.textContent = regionOf(best) + ' · ' + placeOf(best);
   }
 
   /* ----------------------------------------------------------- abilities */
@@ -500,6 +521,23 @@ global.MoceanDungeons = function(ctx){
     rapid:  ()=> true,
     triple: ()=> true,
     pierce: ()=> true,
+    quad:   ()=> true,
+    octa:   ()=> true,
+    surge:  ()=> {                                 // Overdrive: a hard shove now, then 2.6x speed while it lasts (see speedMul)
+      const a = player.displayAngle;
+      player.vx += Math.cos(a)*16; player.vy += Math.sin(a)*16;
+      return true;
+    },
+    nova:   ()=> {
+      ringFx(player.x, player.y, 520, 0xfff2b0, 36);
+      for(let k = M.guards.length - 1; k >= 0; k--){
+        if(Math.hypot(M.guards[k].x - player.x, M.guards[k].y - player.y) < 520) hurtGuard(k, 5);
+      }
+      const b = M.boss;
+      if(b.active && !b.dead && Math.hypot(b.x - player.x, b.y - player.y) < 520 + b.r) damageBoss(5);
+      for(let i = M.shots.length - 1; i >= 0; i--) if(Math.hypot(M.shots[i].x - player.x, M.shots[i].y - player.y) < 520) M.shots.splice(i, 1);
+      return true;
+    },
     camo:   ()=> true,
     magnet: ()=> true,
     ripple: ()=> { ringFx(player.x, player.y, 460, 0x9be8ff); return true; },
@@ -657,11 +695,19 @@ global.MoceanDungeons = function(ctx){
       auraG.lineStyle(1.5, 0xffe28a, 0.4);
       auraG.drawCircle(0, 0, s*(3.2 - 0.6*((now*0.004) % 1)));
     }
-    if(TM.rapid > 0 || TM.triple > 0 || TM.pierce > 0){
+    if(TM.rapid > 0 || TM.triple > 0 || TM.pierce > 0 || TM.quad > 0 || TM.octa > 0){
       auraG.lineStyle(2, TM.pierce > 0 ? 0xffd36a : 0xcff6ff, 0.5);
       auraG.drawCircle(Math.cos(player.displayAngle)*s*1.5, Math.sin(player.displayAngle)*s*1.5, s*0.35);
     }
     auraG.lineStyle(0);
+    if(TM.surge > 0){                                              // Overdrive: a golden comet tail
+      const ca = Math.cos(player.displayAngle), sa = Math.sin(player.displayAngle);
+      for(let i=1;i<=5;i++){
+        auraG.beginFill(0xffd36a, 0.2 - i*0.03);
+        auraG.drawCircle(-ca*s*(0.7 + i*0.95), -sa*s*(0.7 + i*0.95), s*(1.05 - i*0.12));
+        auraG.endFill();
+      }
+    }
     if(dashT > 0){
       auraG.beginFill(0xffffff, 0.18);
       auraG.drawCircle(-Math.cos(player.displayAngle)*s, -Math.sin(player.displayAngle)*s, s*0.9);
@@ -1034,7 +1080,9 @@ global.MoceanDungeons = function(ctx){
     if(!active || !M || M.fireCd > 0) return;
     M.fireCd = 11 / (TM.rapid > 0 ? 2.6 : 1) / rateMul();         // Rapid Bubbles x the Bubble Rate upgrade
     const a = player.displayAngle, pierce = TM.pierce > 0;       // Piercing Bubbles
-    const spread = TM.triple > 0 ? [-0.3, 0, 0.3] : [0];         // Triple Shot
+    const spread = TM.octa > 0 ? [0, 1, 2, 3, 4, 5, 6, 7].map(i => i*Math.PI/4)    // Octa Shot: a full ring
+                 : TM.quad > 0 ? [-0.36, -0.12, 0.12, 0.36]                       // Quad Shot
+                 : TM.triple > 0 ? [-0.3, 0, 0.3] : [0];                          // Triple Shot
     const shark = save.form === 'shark';                         // Shark form: bigger bubbles that hit twice as hard
     for(const o of spread){
       const aa = a + o, reach = shark ? 30 : 20;
@@ -1964,7 +2012,7 @@ global.MoceanDungeons = function(ctx){
 
   /* ----------------------------------------------- hooks used by game.js */
 
-  function speedMul(){ return look().speed * (dashT > 0 ? 2.4 : 1); }
+  function speedMul(){ return look().speed * (TM.surge > 0 ? 2.6 : dashT > 0 ? 2.4 : 1); }   // Overdrive outlasts and outruns the dash
   function gravityMul(){ return (has('wings') && keys.space) ? 0.2 : 1; }
   function levelBonus(){ return look().level; }
   function eatMul(){ return TM.magnet > 0 ? 1.7 : 1; }          // Pearl Magnet widens your bite in open water too
@@ -2001,12 +2049,12 @@ global.MoceanDungeons = function(ctx){
       const p = exitPos(d, 260); player.x = p.x; player.y = p.y; player.vx = player.vy = 0; enterCd = 120;
       return [[`Teleported beside ${d.name}.`, 'ok']];
     }
-    const lines = [['Caves in order (/dungeon <1-20> teleports, exit, reset, unlock, ready, upgrades):', 'info']];
+    const lines = [['Caves in order (/dungeon <1-35> teleports, exit, reset, unlock, ready, upgrades):', 'info']];
     for(const d of DUNGEONS){
       const ab = ABILITIES[d.ability], dx = d.x - player.x;
       const dir = Math.abs(dx) < 100 ? 'right here' : (dx > 0 ? 'east ' : 'west ') + Math.round(Math.abs(dx)/8) + ' m';
-      const where = d.floatY ? `floating at ${Math.round(d.floatY/8)} m depth` : 'on the seafloor';
-      lines.push([`${d.id}. ${d.legend ? '✦ ' : ''}${d.name} [${d.biome.name}]: ${dir}, ${where}. Boss: ${d.boss.name}. ${save.cleared.includes(d.id) ? '[cleared] ' : ''}-> ${ab.name} (${ab.key})`, 'info']);
+      const where = placeOf(d);
+      lines.push([`${d.id}. ${d.legend ? '✦ ' : ''}${d.name} [${regionOf(d)}]: ${dir}, ${where}. Boss: ${d.boss.name}. ${save.cleared.includes(d.id) ? '[cleared] ' : ''}-> ${ab.name} (${ab.key})`, 'info']);
     }
     return lines;
   }
