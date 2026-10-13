@@ -127,7 +127,7 @@ wss.on('connection', (ws, req)=>{
       p.joined = true;
       players.set(p.id, p);
       send(ws, { t:'welcome', id:p.id, name:p.name, n:players.size,
-                 players: Array.from(players.values()).filter(o => o !== p).map(o => ({ id:o.id, name:o.name, s:o.s })) });
+                 players: Array.from(players.values()).filter(o => o !== p).map(o => ({ id:o.id, name:o.name, s:o.s, typing:!!o.typing })) });
       broadcast({ t:'join', p:{ id:p.id, name:p.name }, n:players.size }, p.id);
       if(denied) send(ws, { t:'sys', text:'That name is reserved, so you were renamed ' + p.name + '. Pick another with /name.' });
       return;
@@ -146,7 +146,13 @@ wss.on('connection', (ws, req)=>{
         return send(ws, { t:'sys', text:'Slow down \u2014 you are sending messages too fast.' });
       }
       p.chatTimes.push(now);
+      p.typing = false;
       broadcast({ t:'chat', id:p.id, name:p.name, text });
+    } else if(m.t === 'typing'){
+      const on = m.on === true;
+      if(on === p.typing) return;
+      p.typing = on;
+      broadcast({ t:'typing', id:p.id, on }, p.id);
     } else if(m.t === 'name'){
       const n = cleanName(m.name);
       if(!n || n === p.name || now - p.lastName < 2000) return;
