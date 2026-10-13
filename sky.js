@@ -3,14 +3,17 @@
 
      • sun & moon         sprites loaded from IMAGE LINKS (see CONFIG just below)
      • the sky            four altitude zones, clouds, gulls, stars, aurora
-     • thermals           rising wind columns that carry you up out of the sea
      • the upturned sea   an upside-down ocean floating at the top of the sky:
                           its surface faces down, its seafloor is a ceiling,
                           and its water gets darker the further UP you swim
+     • deep space         beyond the upturned sea's rocky ceiling. The rock is a thin crust with
+                          star rifts (openings) every 3400 px - swim up through one to get out
 
    Altitude map (world y, 0 = sea surface, negative = up):
 
-        y = -11700 - …   inverted seafloor (a rocky ceiling, decor hangs down)
+        y = -∞           deep space never ends
+        y = -12400       deep space begins (above the ceiling's rock crust)
+        y = -11700       inverted seafloor (a rocky ceiling, decor hangs down)
         y =  -6500       surface of the upturned sea  (swim up into it)
         y =  -4800       Starlit Heights
         y =  -2800       High Winds
@@ -46,6 +49,10 @@ const C = {
 };
 C.INV_FLOOR_Y = C.INV_SURFACE_Y - C.INV_DEPTH;
 C.INV_MID = C.INV_SURFACE_Y / 2;
+C.SLAB = 700;                                   // thickness of the rock crust above the upturned sea
+C.SPACE_Y = C.INV_FLOOR_Y - C.SLAB;             // top of the crust: deep space starts here
+C.RIFT_HALF = 230;                              // half-width of a star rift
+C.STRIP = 24;                                   // terrain strip width (rift edges snap to this grid)
 
 const ZONES = [
   { name:'Sea Breeze',      top:-900 },
@@ -56,24 +63,15 @@ const ZONES = [
 
 const hash = (n)=>{ const x = Math.sin(n*127.1)*43758.5453123; return x - Math.floor(x); };
 
-/* thermals: tall columns of rising wind, one every ~1900 px along the sea */
-const T_SPACING = 1900, T_HALF = 190;
-const thermalCenter = (k)=> k*T_SPACING + 900 + (hash(k*3.17 + 1.3) - 0.5)*500;
-function thermal(x){                      // 0..1 strength at x
-  const k0 = Math.round((x - 900)/T_SPACING);
-  let best = 0;
-  for(let k=k0-1;k<=k0+1;k++){
-    const d = Math.abs(x - thermalCenter(k));
-    if(d < T_HALF){ const f = 1 - d/T_HALF; best = Math.max(best, f*f*(3 - 2*f)); }
-  }
-  return best;
+/* star rifts: openings in the upturned sea's rock crust, one halfway between every two neighbouring caves.
+   Swim up through one to leave the upturned sea and enter deep space. Edges snap to the terrain strip grid. */
+const BIO0 = global.MoceanBiomes;
+function riftBounds(x){
+  const k = Math.floor((x - BIO0.FIRST_X)/BIO0.SPACING);
+  const c = BIO0.FIRST_X + k*BIO0.SPACING + BIO0.SPACING/2;
+  return { c, l:Math.ceil((c - C.RIFT_HALF)/C.STRIP)*C.STRIP, r:Math.floor((c + C.RIFT_HALF)/C.STRIP)*C.STRIP };
 }
-function nearestThermalX(x){
-  const k0 = Math.round((x - 900)/T_SPACING);
-  let bx = thermalCenter(k0), bd = Math.abs(bx - x);
-  for(let k=k0-1;k<=k0+1;k++){ const c = thermalCenter(k), d = Math.abs(c - x); if(d < bd){ bd = d; bx = c; } }
-  return bx;
-}
+function inRift(x, pad){ const b = riftBounds(x), p = pad || 0; return x > b.l + p && x < b.r - p; }
 const windX = (y, t)=> Math.sin(y*0.0005 + t*0.00015)*0.6 + 0.4;     // mostly blowing east
 
 /* ============================================================== the module */
@@ -93,6 +91,7 @@ global.MoceanSky = function(ctx){
 
   function zoneAt(y, x){
     if(y >= 0) return null;
+    if(y <= C.SPACE_Y) return 'Deep Space';
     if(y <= C.INV_SURFACE_Y) return 'Upturned ' + Bio.at(x).name;
     for(const z of ZONES) if(y > z.top) return z.name;
     return ZONES[ZONES.length-1].name;
@@ -100,30 +99,103 @@ global.MoceanSky = function(ctx){
 
   /* ----------------------------------------------------------- layers */
 
-  const highG = new PIXI.Graphics();          // deep-sky darkening, stars, aurora   (screen space)
+  const highG = new PIXI.Graphics();          // stars + aurora of the high sky      (screen space)
   const cel = new PIXI.Container();           // sun + moon                           (screen space)
   const celMask = new PIXI.Graphics();        // keeps them above the horizon
   const invSeaG = new PIXI.Graphics();        // water of the upturned sea            (screen space)
   const cloudG = new PIXI.Graphics();         // clouds + gulls                       (world space)
-  const windG = new PIXI.Graphics();          // thermal streaks                      (world space)
   const invFloorG = new PIXI.Graphics();      // ceiling terrain, drawn mirrored      (world space)
   const invSurfG = new PIXI.Graphics();       // underside of the surface + drips     (world space)
 
+  // the deep-sky darkening is two sprites (a baked gradient + a flat cap) instead of many stacked translucent
+  // bands: overlapping band edges used to draw faint horizontal lines across the sky
+  const dimGrad = new PIXI.Sprite(bakeTex(4, 256, (g, w, h)=>{
+    const gr = g.createLinearGradient(0, 0, 0, h);
+    gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, w, h);
+  }));
+  const dimSolid = new PIXI.Sprite(PIXI.Texture.WHITE);
+  dimGrad.tint = dimSolid.tint = 0x0a0d34;
+  dimGrad.visible = dimSolid.visible = false;
+
+  // light climbing out of the upturned sea's surface: one soft baked shaft per sprite (no hard polygon edges)
+  const invRayTex = bakeTex(64, 256, (g, w, h)=>{
+    const v = g.createLinearGradient(0, 0, 0, h);
+    v.addColorStop(0, 'rgba(255,255,255,1)'); v.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = v; g.fillRect(0, 0, w, h);
+    g.globalCompositeOperation = 'destination-in';
+    const hz = g.createLinearGradient(0, 0, w, 0);
+    hz.addColorStop(0, 'rgba(255,255,255,0)'); hz.addColorStop(0.5, 'rgba(255,255,255,1)'); hz.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = hz; g.fillRect(0, 0, w, h);
+  });
+  const invRays = [];
+  for(let i=0;i<6;i++){
+    const sp = new PIXI.Sprite(invRayTex);
+    sp.anchor.set(0.5, 0); sp.tint = 0xcdeeff; sp.blendMode = PIXI.BLEND_MODES.ADD; sp.visible = false;
+    invRays.push(sp);
+  }
+
+  const spaceC = new PIXI.Container();        // deep space: backdrop, nebulae, stars, planets (screen space)
+  const spaceMask = new PIXI.Graphics();      // keeps it above the rock crust
+  spaceC.visible = false;
+
   const skyIdx = app.stage.getChildIndex(skyG);
-  app.stage.addChildAt(highG, skyIdx + 1);
-  app.stage.addChildAt(cel, skyIdx + 2);
-  app.stage.addChildAt(celMask, skyIdx + 3);
-  app.stage.addChildAt(invSeaG, skyIdx + 4);
+  let ins = skyIdx + 1;
+  for(const o of [dimGrad, dimSolid, highG, cel, celMask, invSeaG, ...invRays, spaceC, spaceMask]) app.stage.addChildAt(o, ins++);
   cel.mask = celMask;
+  spaceC.mask = spaceMask;
 
   world.addChildAt(cloudG, 0);                              // behind everything in the world
-  world.addChildAt(windG, 1);
-  world.addChildAt(invFloorG, 2);
-  world.addChildAt(invSurfG, 3);
+  world.addChildAt(invFloorG, 1);
+  world.addChildAt(invSurfG, 2);
   invFloorG.scale.y = -1;                                   // mirror: local y grows "up" from the ceiling
   invFloorG.y = C.INV_FLOOR_Y;
 
-  const allLayers = [highG, cel, invSeaG, cloudG, windG, invFloorG, invSurfG];
+  // rift lighting: soft baked sprites (beam inside the shaft, cone of light spilling into the sea, frost on the crust)
+  const beamTex = bakeTex(32, 256, (g, w, h)=>{
+    const v = g.createLinearGradient(0, 0, 0, h);
+    v.addColorStop(0, 'rgba(255,255,255,1)'); v.addColorStop(1, 'rgba(255,255,255,0.25)');
+    g.fillStyle = v; g.fillRect(0, 0, w, h);
+    g.globalCompositeOperation = 'destination-in';
+    const hz = g.createLinearGradient(0, 0, w, 0);
+    hz.addColorStop(0, 'rgba(255,255,255,0.35)'); hz.addColorStop(0.5, 'rgba(255,255,255,1)'); hz.addColorStop(1, 'rgba(255,255,255,0.35)');
+    g.fillStyle = hz; g.fillRect(0, 0, w, h);
+  });
+  const coneTex = bakeTex(128, 256, (g, w, h)=>{
+    g.fillStyle = '#fff';
+    g.beginPath(); g.moveTo(40, 0); g.lineTo(88, 0); g.lineTo(128, h); g.lineTo(0, h); g.closePath(); g.fill();
+    g.globalCompositeOperation = 'destination-in';
+    const v = g.createLinearGradient(0, 0, 0, h);
+    v.addColorStop(0, 'rgba(255,255,255,1)'); v.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = v; g.fillRect(0, 0, w, h);
+    const hz = g.createLinearGradient(0, 0, w, 0);
+    hz.addColorStop(0, 'rgba(255,255,255,0)'); hz.addColorStop(0.3, 'rgba(255,255,255,1)'); hz.addColorStop(0.7, 'rgba(255,255,255,1)'); hz.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = hz; g.fillRect(0, 0, w, h);
+  });
+  const frostTex = bakeTex(4, 256, (g, w, h)=>{
+    const v = g.createLinearGradient(0, 0, 0, h);
+    v.addColorStop(0, 'rgba(255,255,255,1)'); v.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = v; g.fillRect(0, 0, w, h);
+  });
+  const riftSprites = [];
+  for(let i=0;i<3;i++){
+    const beam = new PIXI.Sprite(beamTex), cone = new PIXI.Sprite(coneTex);
+    for(const sp of [beam, cone]){ sp.tint = 0xbfe9ff; sp.blendMode = PIXI.BLEND_MODES.ADD; sp.visible = false; world.addChildAt(sp, 2); }
+    riftSprites.push({ beam, cone });
+  }
+  const frost = new PIXI.Sprite(frostTex);
+  frost.tint = 0x5f78e0; frost.visible = false;
+  world.addChildAt(frost, 2);
+  const hideRift = ()=>{ frost.visible = false; for(const r of riftSprites) r.beam.visible = r.cone.visible = false; };
+
+  const allLayers = [dimGrad, dimSolid, highG, cel, invSeaG, ...invRays, spaceC, cloudG, invFloorG, invSurfG, frost,
+                     ...riftSprites.flatMap(r => [r.beam, r.cone])];
+
+  function bakeTex(w, h, draw){
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    draw(c.getContext('2d'), w, h);
+    return PIXI.Texture.from(c);
+  }
 
   /* --------------------------------------------------- sun & moon art */
 
@@ -224,17 +296,14 @@ global.MoceanSky = function(ctx){
   function drawHighSky(now, W, H){
     highG.clear();
     const sy = world.y;
+    // darker the higher you are above the sea: clear at 1200 px up, full dusk-blue by 5600 px
+    const aTop = sy - 5600, aBot = sy - 1200;
+    dimSolid.visible = aTop > 0;
+    if(dimSolid.visible){ dimSolid.x = 0; dimSolid.y = 0; dimSolid.width = W; dimSolid.height = Math.min(H, aTop) + 1; dimSolid.alpha = 0.82; }
+    dimGrad.visible = aBot > 0 && aTop < H;
+    if(dimGrad.visible){ dimGrad.x = 0; dimGrad.y = aTop; dimGrad.width = W; dimGrad.height = 4400; dimGrad.alpha = 0.82; }
     if(sy <= 0) return;
     const cut = Math.min(H, sy);
-    const BAND = 32;
-    for(let y=0; y<cut; y+=BAND){                         // darker the higher the row is above the sea
-      const alt = sy - (y + BAND/2);
-      const a = clamp((alt - 1200)/4400, 0, 1);
-      if(a < 0.004) continue;
-      highG.beginFill(0x0a0d34, a*0.82);
-      highG.drawRect(0, y, W, Math.min(BAND, cut - y) + 1);
-      highG.endFill();
-    }
     const altC = sy - H*0.4;
     const starA = clamp((altC - 1800)/2600, 0, 1);     // (the night sky near the sea already has its own stars)
     if(starA > 0.01){
@@ -325,54 +394,6 @@ global.MoceanSky = function(ctx){
     }
   }
 
-  /* ------------------------------------------------------------ thermals */
-
-  function drawThermals(now, W, H){
-    windG.clear();
-    const viewTop = -world.y, viewBot = viewTop + H;
-    const yTop = Math.max(viewTop - 120, C.INV_SURFACE_Y), yBot = Math.min(viewBot + 120, 0);
-    if(yBot <= yTop) return;
-    const left = -world.x - 240, right = -world.x + W + 240;
-    const k0 = Math.floor((left - 900)/T_SPACING) - 1, k1 = Math.ceil((right - 900)/T_SPACING) + 1;
-    const SLOT = 90;
-    for(let k=k0;k<=k1;k++){
-      const cx = thermalCenter(k);
-      if(cx < left || cx > right) continue;
-      // faint column edges
-      windG.lineStyle(1, 0xdff6ff, 0.07);
-      windG.moveTo(cx - T_HALF*0.8, yBot); windG.lineTo(cx - T_HALF*0.8, yTop);
-      windG.moveTo(cx + T_HALF*0.8, yBot); windG.lineTo(cx + T_HALF*0.8, yTop);
-      for(let s=Math.floor(yTop/SLOT); s<=Math.ceil(yBot/SLOT) + 1; s++){
-        for(let q=0;q<2;q++){
-          const seed = k*31.7 + s*7.13 + q*3.3, v = 0.12 + hash(seed)*0.14;
-          const f = ((now*v/SLOT) + hash(seed*1.9)) % 1;
-          const y = s*SLOT - f*SLOT*1.0;
-          if(y < yTop || y > yBot) continue;
-          const x = cx + (hash(seed*2.7) - 0.5)*T_HALF*1.5 + Math.sin(y*0.012 + seed)*9;
-          const len = 26 + hash(seed*5.1)*40, a = Math.sin(Math.PI*f)*0.28;
-          windG.lineStyle({ width:1.6, color:0xe8f8ff, alpha:a, ...ROUND });
-          windG.moveTo(x, y); windG.quadraticCurveTo(x + 5, y - len*0.5, x - 2, y - len);
-          if(q === 0 && hash(seed*8.1) > 0.6){            // a rising droplet
-            windG.lineStyle(0); windG.beginFill(0xbfe9ff, a*1.3); windG.drawCircle(x + 8, y - len*0.3, 2.2); windG.endFill();
-          }
-        }
-      }
-    }
-  }
-
-  let hintT = 0;
-  function thermalBubbles(dt){                            // under the waves, bubble streams point toward the sky
-    if(player.y < 60 || player.y > 2400) return;
-    const cx = nearestThermalX(player.x);
-    if(Math.abs(cx - player.x) > 1100) return;
-    hintT -= dt;
-    if(hintT > 0) return;
-    hintT = rand(6, 14);
-    const y = player.y + rand(60, 340);
-    const x = cx + rand(-T_HALF*0.7, T_HALF*0.7);
-    if(y < floorY(x) - 20) burstBubbles(x, y, 1);
-  }
-
   /* ----------------------------------------------------------- the upturned sea */
 
   const INV_STOPS = [
@@ -390,7 +411,7 @@ global.MoceanSky = function(ctx){
   function drawInvSea(now, W, H){
     invSeaG.clear();
     const surfScreen = world.y + C.INV_SURFACE_Y;           // where its surface is on screen; water is ABOVE it
-    if(surfScreen <= 0) return;
+    if(surfScreen <= 0){ for(const sp of invRays) sp.visible = false; return; }
     const br = getBrightness();
     const tint = Bio.tintAt(player.x).map(v => 1 + (v - 1)*0.55);   // mirrors the biome you are under
     const shade = (c)=> rgbHex([c[0]*br*tint[0], c[1]*br*tint[1], c[2]*br*tint[2]]);
@@ -416,19 +437,17 @@ global.MoceanSky = function(ctx){
       invSeaG.endFill();
     }
     // light climbing out of the surface, up through the water
-    if(surfScreen > 0 && surfScreen < H + 700){
-      for(let i=0;i<6;i++){
-        const x0 = ((i*(W/4) - player.x*0.1 + Math.sin(now*0.00022 + i*1.7)*70) % (W + 300) + (W + 300)) % (W + 300) - 150;
-        const w0 = 24 + (i % 3)*14, pulse = 0.5 + 0.5*Math.sin(now*0.0008 + i*2.1);
-        for(let k=0;k<5;k++){
-          const y0 = surfScreen - k*150, y1 = surfScreen - (k+1)*150;
-          if(y1 > H) continue;
-          invSeaG.beginFill(0xcdeeff, 0.05*pulse*(1 - k/5));
-          invSeaG.drawPolygon([x0 - 0.3*(surfScreen - y0), y0, x0 + w0 - 0.3*(surfScreen - y0), y0,
-                               x0 + w0*2.4 - 0.3*(surfScreen - y1), y1, x0 - 0.3*(surfScreen - y1) - w0*0.4, y1]);
-          invSeaG.endFill();
-        }
-      }
+    const lit = surfScreen > 0 && surfScreen < H + 700;
+    for(let i=0;i<6;i++){
+      const sp = invRays[i];
+      if(!lit){ sp.visible = false; continue; }
+      const x0 = ((i*(W/4) - player.x*0.1 + Math.sin(now*0.00022 + i*1.7)*70) % (W + 300) + (W + 300)) % (W + 300) - 150;
+      const w0 = 24 + (i % 3)*14, pulse = 0.5 + 0.5*Math.sin(now*0.0008 + i*2.1);
+      sp.visible = true;
+      sp.x = x0 + w0; sp.y = surfScreen;
+      sp.rotation = -Math.atan(0.3);
+      sp.scale.set(w0*3.4/64, -760/256);                    // negative y scale: the shaft grows upward from the surface
+      sp.alpha = clamp(0.07 + 0.09*pulse, 0, 1);
     }
   }
 
@@ -446,55 +465,187 @@ global.MoceanSky = function(ctx){
       invSurfG.moveTo(left, wave(left) - r*14);
       for(let x=left;x<=right;x+=24) invSurfG.lineTo(x, wave(x) - r*14 - Math.sin(x*0.03 + r)*2.5);
     }
-    // water drips off the underside and falls toward the real sea
-    const CELL = 150;
-    for(let k=Math.floor(left/CELL); k<=Math.ceil(right/CELL); k++){
-      if(hash(k*2.37) > 0.45) continue;
-      const period = 2600 + hash(k*5.1)*2400;
-      const f = ((now + hash(k*9.7)*period) % period)/period;
-      const x = k*CELL + hash(k*1.3)*CELL;
-      const y = wave(x) + 8 + f*f*520;
-      const stretch = 3 + f*14;
-      invSurfG.lineStyle({ width:2, color:0xbfe9ff, alpha:(1 - f)*0.7, ...ROUND });
-      invSurfG.moveTo(x, y - stretch); invSurfG.lineTo(x, y);
-    }
   }
 
   function drawInvFloor(now, W, H){
     invFloorG.clear();
     const g = invFloorG;
     const localTop = C.INV_FLOOR_Y + world.y + 200;        // local y (grows away from the ceiling) at the top of the view
-    if(localTop < -160) return;                            // the view hasn't reached the ceiling yet
+    if(localTop < -900){ hideRift(); return; }             // the view hasn't come near the ceiling yet
     const wf = (x)=> floorY(x) - 8000;
-    const left = -world.x - 100, right = -world.x + W + 100;
-    const bottom = Math.max(localTop, 700);
+    const ST = C.STRIP, top = C.SLAB;                      // the rock is a crust SLAB px thick; deep space starts above it
+    const left = Math.floor((-world.x - 100)/ST)*ST, right = -world.x + W + 100;
+    const gap = (x)=> inRift(x);                           // inside a star rift: no rock
 
-    const BAND_OFFS = [0, 34, 96, 210, 420], STRIP = 24;
+    const BAND_OFFS = [0, 34, 96, 210, 420];
     const edge = (x, off)=> wf(x) + off + Math.sin(x*0.013 + off)*off*0.06;
     BAND_OFFS.forEach((off, bi)=>{
-      for(let x=left; x<right; x+=STRIP){
-        const x2 = x + STRIP;
-        g.beginFill(Bio.mixHex(Bio.bandColor(x + STRIP/2, bi), 0x05060e, 0.4));
-        g.drawPolygon([x, edge(x, off), x2 + 1, edge(x2, off), x2 + 1, bottom, x, bottom]);
+      for(let x=left; x<right; x+=ST){
+        if(gap(x + ST/2)) continue;
+        const x2 = x + ST;
+        g.beginFill(Bio.mixHex(Bio.bandColor(x + ST/2, bi), 0x05060e, 0.4));
+        g.drawPolygon([x, edge(x, off), x2 + 1, edge(x2, off), x2 + 1, top, x, top]);
         g.endFill();
       }
     });
+
     const spark = Bio.sparkleAt(player.x);
+    // polyline along the rock surface that lifts the pen over every rift
+    const run = (fn)=>{
+      let pen = false;
+      for(let x=left; x<=right; x+=ST){
+        if(gap(x + ST/2) && gap(x - ST/2)){ pen = false; continue; }
+        const y = fn(x);
+        if(!pen){ g.moveTo(x, y); pen = true; } else g.lineTo(x, y);
+      }
+    };
     g.lineStyle(1, spark, 0.12);
-    for(let r=1;r<=3;r++){
-      g.moveTo(left, wf(left) + r*14);
-      for(let x=left;x<=right;x+=24) g.lineTo(x, wf(x) + r*14 + Math.sin(x*0.045 + r*2.1)*2.5);
-    }
+    for(let r=1;r<=3;r++) run((x)=> wf(x) + r*14 + Math.sin(x*0.045 + r*2.1)*2.5);
     g.lineStyle(1.5, spark, 0.4);
-    g.moveTo(left, wf(left));
-    for(let x=left;x<=right;x+=24) g.lineTo(x, wf(x));
+    run((x)=> wf(x));
+    g.lineStyle(1.5, 0xcfe0ff, 0.18);                      // the crust's top face, where deep space begins
+    run(()=> top);
+
+    // frost: the crust's top face catches the glow of space
+    frost.visible = true;
+    frost.x = -world.x - 60; frost.width = W + 120; frost.y = C.SPACE_Y; frost.height = 320; frost.alpha = 0.5;
+    g.lineStyle(7, 0x8fa8ff, 0.07); run(()=> top);          // soft rim light along the top
+
+    // star rifts: lit shafts through the crust, a beam inside and a cone of light spilling into the sea
+    const k0 = Math.floor((left - BIO0.FIRST_X)/BIO0.SPACING), k1 = Math.floor((right - BIO0.FIRST_X)/BIO0.SPACING);
+    let ri = 0;
+    for(let k=k0;k<=k1;k++){
+      const rb = riftBounds(BIO0.FIRST_X + k*BIO0.SPACING + 10);
+      const pulse = 0.5 + 0.5*Math.sin(now*0.002 + k), w = rb.r - rb.l;
+      if(ri < riftSprites.length){
+        const rs = riftSprites[ri++], coneW = w*128/48;
+        rs.beam.visible = true; rs.beam.x = rb.l; rs.beam.y = C.SPACE_Y; rs.beam.width = w; rs.beam.height = C.SLAB + 70; rs.beam.alpha = 0.3 + 0.12*pulse;
+        rs.cone.visible = true; rs.cone.x = (rb.l + rb.r)/2 - coneW/2; rs.cone.y = C.INV_FLOOR_Y - 30; rs.cone.width = coneW; rs.cone.height = 1900; rs.cone.alpha = 0.2 + 0.08*pulse;
+      }
+      // walls: wide soft glow, bright core, and rune ticks that pulse up the rock
+      for(const wx of [rb.l, rb.r]){
+        const dirIn = wx === rb.l ? 1 : -1;
+        g.lineStyle(7, 0x9be8ff, 0.1 + 0.05*pulse); g.moveTo(wx, wf(wx)); g.lineTo(wx, top);
+        g.lineStyle(2, 0xdff6ff, 0.6 + 0.2*pulse);   g.moveTo(wx, wf(wx)); g.lineTo(wx, top);
+        for(let y=wf(wx) + 40; y<top - 10; y+=64){
+          const tp = 0.5 + 0.5*Math.sin(now*0.003 - y*0.02 + k);
+          g.lineStyle(2, 0x9be8ff, 0.25 + 0.5*tp);
+          g.moveTo(wx, y); g.lineTo(wx + dirIn*(8 + tp*8), y);
+        }
+      }
+      // the shaft's water ends at the crust top: a rippling line with a faint glow
+      g.lineStyle(5, 0xbfe9ff, 0.1); 
+      for(let pass=0; pass<2; pass++){
+        g.lineStyle(pass ? 1.6 : 5, 0xdff6ff, pass ? 0.65 : 0.1);
+        for(let x=rb.l; x<=rb.r; x+=8){
+          const y = top + Math.sin(x*0.05 + now*0.004)*2.2;
+          x === rb.l ? g.moveTo(x, y) : g.lineTo(x, y);
+        }
+      }
+    }
+    for(let i=ri;i<riftSprites.length;i++) riftSprites[i].beam.visible = riftSprites[i].cone.visible = false;
 
     const cell = 70;
     for(let i=Math.floor(left/cell)-1; i<=Math.floor(right/cell)+1; i++){      // the same props, hanging like stalactites
       const h = hash(i*1.7 + 55.3);
       const wx = i*cell + hash(i*2.91 + 9)*30;
+      if(inRift(wx, -60)) continue;
       const kind = Bio.decorFor(Bio.at(wx), h);
       if(kind) Bio.drawDecor(g, kind, wx, wf(wx), hash(i*3.3 + 31.7), now);
+    }
+  }
+
+  /* ----------------------------------------------------------- deep space */
+
+  const NEBULAE = [
+    { tint:0x5a3aff, size:1500, u:0.15, v:0.30, k:0.030, a:0.20 },
+    { tint:0xff4fa8, size:1200, u:0.70, v:0.65, k:0.045, a:0.15 },
+    { tint:0x2fd6ff, size:1700, u:0.50, v:0.10, k:0.020, a:0.13 },
+    { tint:0x8a5cff, size:1100, u:0.88, v:0.20, k:0.060, a:0.14 }
+  ];
+  const nebSprites = NEBULAE.map(n =>{
+    const sp = new PIXI.Sprite(glowTex);
+    sp.anchor.set(0.5); sp.tint = n.tint; sp.blendMode = PIXI.BLEND_MODES.ADD; sp.width = sp.height = n.size;
+    spaceC.addChild(sp);
+    return sp;
+  });
+  const spaceStarsG = new PIXI.Graphics(), spacePlanetsG = new PIXI.Graphics();
+  spaceC.addChildAt(new PIXI.Graphics(), 0);                 // flat backdrop sits at the very back
+  const spaceBackG = spaceC.children[0];
+  spaceC.addChild(spacePlanetsG, spaceStarsG);
+  // atmosphere: a glow hugging the top of the crust that melts into space, so the edge isn't a hard cut
+  const hazeSprite = new PIXI.Sprite(bakeTex(4, 256, (g, w, h)=>{
+    const gr = g.createLinearGradient(0, 0, 0, h);
+    gr.addColorStop(0, 'rgba(255,255,255,0)'); gr.addColorStop(0.55, 'rgba(255,255,255,0.35)'); gr.addColorStop(1, 'rgba(255,255,255,1)');
+    g.fillStyle = gr; g.fillRect(0, 0, w, h);
+  }));
+  hazeSprite.tint = 0x6f8cff; hazeSprite.blendMode = PIXI.BLEND_MODES.ADD;
+  spaceC.addChild(hazeSprite);
+
+  const PLANETS = [
+    { u:0.22, v:0.34, r:70,  col:0xff9a5c, ring:false, k:0.05 },
+    { u:0.74, v:0.58, r:130, col:0x6fa8ff, ring:true,  k:0.035 },
+    { u:0.46, v:0.16, r:42,  col:0xd9c8ff, ring:false, k:0.08 }
+  ];
+  const wrap = (v, m)=> ((v % m) + m) % m;
+  const SPACE_STARS = 190;
+
+  function drawSpace(now, W, H){
+    const topScreen = world.y + C.SPACE_Y;                  // where the crust's top face is on screen
+    spaceC.visible = topScreen > 0;
+    if(!spaceC.visible) return;
+    const cut = Math.min(H, topScreen + 1);
+    spaceMask.clear(); spaceMask.beginFill(0xffffff); spaceMask.drawRect(0, 0, W, cut); spaceMask.endFill();
+
+    const br = getBrightness();
+    const f = clamp((C.SPACE_Y - player.y)/4600, 0, 1);      // darker the higher you go
+    spaceBackG.clear();
+    const drift = Math.max(0, C.SPACE_Y - player.y - 4600)/9000;          // far out, the void slowly shifts colour
+    const far = [Math.round(3 + 9*Math.max(0, Math.sin(drift))), 4, Math.round(14 + 10*Math.max(0, Math.sin(drift + 2)))];
+    spaceBackG.beginFill(rgbHex(mix3([14,16,52], far, f).map(v => v*br)));
+    spaceBackG.drawRect(0, 0, W, H);
+    spaceBackG.endFill();
+
+    // the sky only gives way to space gradually: nebulae, planets and stars fade in with altitude above the crust
+    const lift = clamp((C.SPACE_Y - player.y + 400)/1800, 0.12, 1);
+    hazeSprite.x = 0; hazeSprite.width = W; hazeSprite.height = 900; hazeSprite.y = topScreen - 900;
+    hazeSprite.alpha = 0.42*(0.5 + 0.5*(1 - lift));
+    spacePlanetsG.alpha = lift;
+    NEBULAE.forEach((n, i)=>{
+      const m = n.size, sp = nebSprites[i];
+      sp.x = wrap(n.u*(W + m) - player.x*n.k, W + m) - m/2;
+      sp.y = wrap(n.v*(H + m) - player.y*n.k, H + m) - m/2;
+      sp.alpha = n.a*lift*(0.8 + 0.2*Math.sin(now*0.0004 + i*2))*(0.6 + 0.4*br);
+    });
+
+    spacePlanetsG.clear();
+    for(const p of PLANETS){
+      const m = W + p.r*4, px = wrap(p.u*m - player.x*p.k, m) - p.r*2, py = wrap(p.v*(H + p.r*4) - player.y*p.k, H + p.r*4) - p.r*2;
+      if(p.ring){ spacePlanetsG.lineStyle(p.r*0.12, 0xdfe8ff, 0.28); spacePlanetsG.drawEllipse(px, py, p.r*1.9, p.r*0.5); }
+      spacePlanetsG.lineStyle(0);
+      spacePlanetsG.beginFill(p.col, 0.95); spacePlanetsG.drawCircle(px, py, p.r); spacePlanetsG.endFill();
+      spacePlanetsG.beginFill(0x05061a, 0.38); spacePlanetsG.drawCircle(px + p.r*0.32, py + p.r*0.22, p.r*0.86); spacePlanetsG.endFill();
+      spacePlanetsG.beginFill(0xffffff, 0.16); spacePlanetsG.drawCircle(px - p.r*0.35, py - p.r*0.35, p.r*0.45); spacePlanetsG.endFill();
+      if(p.ring){ spacePlanetsG.lineStyle(p.r*0.12, 0xdfe8ff, 0.3); spacePlanetsG.moveTo(px - p.r*1.9, py); spacePlanetsG.arc(px, py, p.r*1.9, Math.PI, 0, false); }
+    }
+
+    spaceStarsG.clear();
+    for(let i=0;i<SPACE_STARS;i++){
+      const z = 0.2 + hash(i*3.1)*0.8;
+      const sx = wrap(hash(i*1.7)*W - player.x*z*0.2, W), sy = wrap(hash(i*5.9)*H - player.y*z*0.2, H);
+      if(sy > cut) continue;
+      const tw = 0.55 + 0.45*Math.sin(now*0.002 + i*1.7);
+      const near = clamp((topScreen - sy)/900, 0, 1);       // stars thin out toward the crust and the haze
+      spaceStarsG.beginFill(i % 11 === 0 ? 0xcfe8ff : i % 7 === 0 ? 0xffe6b0 : 0xffffff, (0.35 + 0.6*z)*tw*near);
+      spaceStarsG.drawCircle(sx, sy, 0.5 + z*1.3);
+      spaceStarsG.endFill();
+    }
+    for(let i=0;i<3;i++){                                   // the odd shooting star
+      const period = 6500 + i*3100, cyc = Math.floor((now + i*2111)/period), f2 = ((now + i*2111) % period)/period;
+      if(f2 > 0.07) continue;
+      const t = f2/0.07, x0 = hash(cyc*2.3 + i)*W, y0 = hash(cyc*4.1 + i)*cut*0.7;
+      spaceStarsG.lineStyle({ width:1.6, color:0xffffff, alpha:(1 - t)*0.8, ...ROUND });
+      spaceStarsG.moveTo(x0 + t*220, y0 + t*110); spaceStarsG.lineTo(x0 + t*220 - 60, y0 + t*110 - 30);
     }
   }
 
@@ -621,11 +772,10 @@ global.MoceanSky = function(ctx){
     drawInvSea(now, W, H);
     drawClouds(now, W, H);
     drawGulls(now, W, H);
-    drawThermals(now, W, H);
+    drawSpace(now, W, H);
     drawInvFloor(now, W, H);
     drawInvSurface(now, W, H);
     updateLife(dt);
-    thermalBubbles(dt);
   }
 
   /* ------------------------------------------------------------- commands */
@@ -634,12 +784,14 @@ global.MoceanSky = function(ctx){
     const out = [];
     if(cmd === 'sky'){
       const what = (args[0] || '').toLowerCase();
-      if(what === 'thermal'){ player.x = nearestThermalX(player.x); player.y = -40; player.vx = 0; player.vy = -4; out.push(['Standing in a thermal. Hold on.', 'ok']); }
-      else if(what === 'top'){ player.y = C.INV_SURFACE_Y + 300; player.vx = player.vy = 0; out.push(['Teleported to the Starlit Heights, just under the upturned sea.', 'ok']); }
-      else { player.y = -1500; player.vx = player.vy = 0; out.push(['Teleported into the Cloud Deck.  (/sky thermal | /sky top | /inverted)', 'ok']); }
+      if(what === 'top'){ player.y = C.INV_SURFACE_Y + 300; player.vx = player.vy = 0; out.push(['Teleported to the Starlit Heights, just under the upturned sea.', 'ok']); }
+      else { player.y = -1500; player.vx = player.vy = 0; out.push(['Teleported into the Cloud Deck.  (/sky top | /inverted | /space)', 'ok']); }
     } else if(cmd === 'inverted'){
       player.y = C.INV_SURFACE_Y - 400; player.vx = player.vy = 0;
       out.push(['Teleported into the upturned sea. Swim down to reach its surface.', 'ok']);
+    } else if(cmd === 'space'){
+      player.x = riftBounds(player.x).c; player.y = C.SPACE_Y - 500; player.vx = player.vy = 0;
+      out.push(['Teleported into deep space, just above a star rift.', 'ok']);
     } else if(cmd === 'sun' || cmd === 'moon'){
       const url = args.join(' ').trim();
       const apply = cmd === 'sun' ? setSunImage : setMoonImage;
@@ -650,11 +802,12 @@ global.MoceanSky = function(ctx){
     return out;
   }
 
-  return { update, command, thermal, nearestThermalX, windX, invFloorY, zoneAt, isInverted, setSunImage, setMoonImage, C };
+  return { update, command, windX, invFloorY, zoneAt, isInverted, setSunImage, setMoonImage, C, riftBounds, inRift };
 };
 
 global.MoceanSky.C = C;
-global.MoceanSky.thermal = thermal;
+global.MoceanSky.riftBounds = riftBounds;
+global.MoceanSky.inRift = inRift;
 global.MoceanSky.windX = windX;
 
 })(window);
