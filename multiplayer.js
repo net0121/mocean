@@ -32,7 +32,7 @@ global.MoceanMultiplayer = function(ctx){
 
   /* ------------------------------------------------------------ settings */
 
-  const cfg = { enabled:true, name:'', tags:true, server:'', devKey:'' };
+  const cfg = { enabled:true, name:'', tags:true, server:'', devKey:'0121' };
   try{ Object.assign(cfg, JSON.parse(localStorage.getItem(KEY) || '{}')); }catch(err){}
   cfg.name = cleanName(cfg.name) || ('Fish' + (1000 + Math.floor(Math.random()*9000)));
   const saveCfg = ()=>{ try{ localStorage.setItem(KEY, JSON.stringify(cfg)); }catch(err){} };
