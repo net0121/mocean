@@ -9,4 +9,4 @@ services:
       - key: TRUST_PROXY
         value: "1"
       - key: DEV_KEY
-        sync: false          # Render asks you for this value; it unlocks the reserved name "iamdev"
+        value: "0121"        # unlocks the reserved name "iamdev" (enter in game with /devkey 0121)
