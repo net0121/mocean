@@ -29,8 +29,8 @@ const TRUST_PROXY = process.env.TRUST_PROXY === '1';
 const ROOT = __dirname;
 // The name "iamdev" unlocks dev commands in the client, so it is reserved: only a player who sends the
 // DEV_KEY (set it as an environment variable; they enter it in game with /devkey) may use it.
-// If DEV_KEY is not set, nobody can use the name on this server.
-const DEV_KEY = process.env.DEV_KEY || '';
+// If DEV_KEY is not set, it defaults to 0121.
+const DEV_KEY = process.env.DEV_KEY || '0121';
 const nameOk = (n, key)=> n.toLowerCase().replace(/[^a-z0-9]/g, '') !== 'iamdev' || (DEV_KEY !== '' && key === DEV_KEY);
 
 const MIME = {
