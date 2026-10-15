@@ -1,2082 +1,2085 @@
 /* =============================================================================
-   dungeons.js — 20 seafloor caves with randomly generated mazes, 20 bosses
-   (9 of them Mythical Sea Legends) and the abilities you earn by clearing them.
-
-   The caves sit in a line heading east, evenly spaced and in order of difficulty
-   (see biomes.js for the biome each one lives in). Swim into the dark mouth to
-   enter. Inside: a fresh random maze every visit, patrolling guardians, pearls
-   in the dead ends (XP) and a glowing relic behind the boss. Space fires bubbles,
-   you have 5 hearts, and the relic only appears once the boss is beaten.
-   The first clear of each cave unlocks an ability:
-
-     #  Cave                  Boss                              Ability (key)
-     1  Coral Hollow          Claw Baron                        Shapeshift (F)
-     2  Anemone Maze          Captain Bloat                     Rapid Bubbles (Q)
-     3  Glimmer Grotto        Lantern King                      Biolight (G)
-     4  Kelp Labyrinth        Kelp Strangler                    Tidal Dash (Shift)
-     5  Sargasso Tangle       Sargasso Queen                    Triple Shot (E)
-     6  Siren's Cove          * Lorelei, the Siren Queen        Tide Heal (T)
-     7  Drowned Citadel       Iron Lobster Warlord              Pearl Magnet (U)
-     8  Shipwreck Graveyard   * The Flying Dutchman             Camouflage (C)
-     9  Tidal Temple          Tidal Megalodon                   Sea Wings (hold Space)
-    10  Ember Vents           Magma Manta                       Ink Cloud (Y)
-    11  Obsidian Forge        * Ryujin, the Dragon King         Whirlpool (V)
-    12  Thunder Spire         Thunder Eel Tyrant                Chain Lightning (Z)
-    13  Frostbite Cavern      Great White Frostjaw              Piercing Bubbles (R)
-    14  Glacier Gullet        * Aspidochelone, Island Turtle    Sonar Ping (O)
-    15  Midgard Deep          * Jormungandr, World Serpent      Time Ripple (I)
-    16  Twilight Bloom        * The Sea Hydra                   Riptide (P)
-    17  Lantern Warren        Deepglow Matriarch                Ghost Current (N)
-    18  Abyssal Vault         * Abyss Kraken                    Bubble Shield (B)
-    19  Charybdis Maw         * Charybdis, the Devouring Maw    Pearl Cannon (X)
-    20  Leviathan's Throne    * Leviathan, the Sea Serpent King Tsunami (M)
-
-   Caves 21-30 float inside the UPTURNED sea high above the clouds; caves 31-35 drift in DEEP SPACE, beyond the
-   upturned sea's rock crust (swim up through a glowing star rift to get there). Some of them grant new abilities:
-     21  Abyssal Gauntlet       Quad Shot (4)    4-way bubble fan
-     22  The Drowned Archive    Overdrive (H)    a much longer, faster boost than Tidal Dash (works everywhere)
-     27  Throne of Broken Tides Nova Burst (K)   big shockwave: 5 damage + erases enemy shots
-     31  Tempest Engine         Octa Shot (J)    bubbles fly out in 8 directions
-
-   (* = Mythical Sea Legend: a bigger arena, a longer health bar, spiral attacks
-   and a boss that gets steadily angrier as it loses health.)
-
-   Caves grow in every way as you head east: each maze is strictly bigger than the last, with more
-   (and tougher) guardians - from cave 5 on some of them spit shots - and each boss has more health.
-   Bosses from cave 10 up are ELITES: they circle and lead their shots, blink around the arena, fire
-   homing orbs and sweeping streams, wear armor, and raise a bubble shield (that you can only get
-   past by waiting it out) every third of their health. They also get the longest health bars.
-
-   Every 3 character levels you pick an upgrade: +1 heart, faster bubbles or more strength.
-
-   Every ability that is not a toggle has a duration and a cooldown; its chip in
-   the ability bar fills as the cooldown recovers. An edge-of-screen compass
-   points to the next uncleared cave in order.
-
-   Loaded after biomes.js and fish.js, before game.js. game.js calls MoceanDungeons(ctx).
+   fish.js — every creature in mocean: the fish-shape polygons (drawFishShape),
+   schools, and all spawn / update / redraw code for each species.
+   Loaded before game.js. game.js calls MoceanFish(ctx) and gets the API back.
    ============================================================================= */
 (function(global){
 "use strict";
 
-global.MoceanDungeons = function(ctx){
-  const { app, world, player, keys, rand, randi, clamp, lerpAngle, floorY,
-          PLAYER_COLORS, SHARK_COLORS, drawFishShape, view, hideWhenInside, addXP, popText,
-          burstBubbles, playBlip, isStarted, getLevel, getDifficulty, mouseScreen, showHoverLabel, hideHoverLabel } = ctx;
+global.MoceanFish = function(ctx){
+  const { creaturesLayer, rand, randi, clamp, lerp, lerpAngle, ROUND,
+          WORLD_TOP_MARGIN, floorY, attachHoverLabel } = ctx;
+  // ctx.options is read lazily (it is a live getter) so difficulty changes apply instantly
 
-  const SAVE_KEY = 'mocean.dungeons.v2';
-  const OLD_SAVE_KEY = 'mocean.dungeons.v1';
-  const OLD_TO_NEW = { 1:1, 2:4, 3:3, 4:18, 5:9 };   // v1 cave numbers -> their place in the new order
-  const BIO = MoceanBiomes;
-  const T = 110; // maze tile size in world units
-  const BASE_HP = 5;
-  const ROUND = { cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND };
+  /* ============================= FISH SHAPE ============================= */
 
-  /* ---------------------------------------------------------------- data */
+  /* Faces a creature along `angle` without swimming upside-down: heading left mirrors it
+     vertically (eased so turns stay smooth). */
+  function orient(g, angle){
+    g.rotation = angle;
+    const target = Math.cos(angle) < 0 ? -1 : 1;
+    g.scale.y += (target - g.scale.y) * 0.16;
+  }
 
-  // one row per cave, in the order you meet them heading east. x comes from biomes.js (even spacing).
-  // legend:true  -> Mythical Sea Legend (bigger arena, more health, spiral attacks)
-  const RAW = [
-    [ 1,'Coral Hollow',        5,4,3, 0x2b6f78,0x0a2a33,0x7fe8d4, 0,    'shapeshift', ['crab','urchin'],
-      { kind:'crab',   name:'Claw Baron',                      r:60 } ],
-    [ 2,'Anemone Maze',        5,4,3, 0x8a3a6f,0x2a0b22,0xff9bd2, 0,    'rapid',      ['puffer','urchin'],
-      { kind:'puffer', name:'Captain Bloat',                   r:54 } ],
-    [ 3,'Glimmer Grotto',      6,5,4, 0x5a3a8a,0x150b2a,0xd59bff, 5200, 'glow',       ['jelly','angler'],
-      { kind:'angler', name:'Lantern King',                    r:58 } ],
-    [ 4,'Kelp Labyrinth',      7,5,4, 0x2f6b3a,0x0b2412,0xb6ff7a, 3000, 'dash',       ['eel','puffer'],
-      { kind:'eel',    name:'Kelp Strangler',                  r:44 } ],
-    [ 5,'Sargasso Tangle',     7,5,5, 0x4a6a2a,0x141f0b,0xe0ff7a, 0,    'triple',     ['jelly','eel'],
-      { kind:'jelly',  name:'Sargasso Queen',                  r:58, pal:[0x7fe8a8,0xd5ff9b] } ],
-    [ 6,"Siren's Cove",        8,6,5, 0x3a7a9a,0x0b2330,0xa8f0ff, 2400, 'heal',       ['jelly','puffer','eel'],
-      { kind:'siren',  name:'Lorelei, the Siren Queen',        r:70, legend:true } ],
-    [ 7,'Drowned Citadel',     8,6,5, 0x5a6068,0x14171c,0xcfd8e4, 0,    'magnet',     ['crab','eel','urchin'],
-      { kind:'crab',   name:'Iron Lobster Warlord',            r:68, pal:[0x9aa8b8,0xe6f0ff] } ],
-    [ 8,'Shipwreck Graveyard', 9,6,6, 0x6a4e33,0x1f150b,0xe8c88a, 0,    'camo',       ['eel','crab','angler'],
-      { kind:'ghostship', name:'The Flying Dutchman',          r:84, legend:true } ],
-    [ 9,'Tidal Temple',        9,7,6, 0x8a7a3a,0x2a230b,0xffe28a, 1100, 'wings',      ['jelly','crab','puffer','eel'],
-      { kind:'shark',  name:'Tidal Megalodon',                 r:60 } ],
-    [10,'Ember Vents',        10,7,6, 0x7a3a22,0x2a0f08,0xff9d5c, 0,    'ink',        ['urchin','puffer','crab'],
-      { kind:'ray',    name:'Magma Manta',                     r:62 } ],
-    [11,'Obsidian Forge',     10,7,7, 0x5a2a2a,0x1f0a0a,0xff6a3a, 0,    'whirl',      ['crab','eel','urchin'],
-      { kind:'dragon', name:'Ryujin, the Dragon King',         r:76, legend:true } ],
-    [12,'Thunder Spire',      11,7,7, 0x6a5a1f,0x241f08,0xffe14d, 3800, 'chain',      ['eel','jelly','puffer'],
-      { kind:'eel',    name:'Thunder Eel Tyrant',              r:56, pal:[0xffe14d,0xffffff] } ],
-    [13,'Frostbite Cavern',   11,8,7, 0x5a8aa8,0x0e2230,0xdff6ff, 0,    'pierce',     ['puffer','urchin','jelly'],
-      { kind:'shark',  name:'Great White Frostjaw',            r:66, cols:{ body:0xe8f4ff, fin:0xffffff } } ],
-    [14,'Glacier Gullet',     12,8,8, 0x4a7a9a,0x0b1f30,0xbfe9ff, 1700, 'sonar',      ['jelly','angler','eel'],
-      { kind:'turtle', name:'Aspidochelone, the Island Turtle', r:88, legend:true } ],
-    [15,'Midgard Deep',       12,8,8, 0x3a4a8a,0x0a0f2a,0x9bb8ff, 0,    'ripple',     ['eel','crab','angler'],
-      { kind:'serpent', name:'Jormungandr, the World Serpent', r:80, legend:true, pal:[0x7aa8ff,0xdff6ff] } ],
-    [16,'Twilight Bloom',     13,8,8, 0x6a3a8a,0x1a0b2a,0xff7ad9, 0,    'riptide',    ['jelly','urchin','angler'],
-      { kind:'hydra',  name:'The Sea Hydra',                   r:78, legend:true } ],
-    [17,'Lantern Warren',     13,9,9, 0x2a7a6a,0x082420,0x58ffd8, 6300, 'ghost',      ['angler','jelly','eel'],
-      { kind:'angler', name:'Deepglow Matriarch',              r:70, pal:[0x58e0d0,0xa8ffe8] } ],
-    [18,'Abyssal Vault',      14,9,9, 0x7a2f3f,0x2a0b13,0xff7a8f, 0,    'shield',     ['urchin','angler','eel'],
-      { kind:'kraken', name:'Abyss Kraken',                    r:72, legend:true } ],
-    [19,'Charybdis Maw',      14,9,10, 0x2a2a5a,0x0b0b1f,0x7a9bff, 4600, 'cannon',    ['jelly','angler','crab','eel'],
-      { kind:'charybdis', name:'Charybdis, the Devouring Maw', r:84, legend:true } ],
-    [20,"Leviathan's Throne", 15,10,10, 0x3a2a6a,0x0e0a22,0xffd36a, 0,   'tsunami',    ['eel','angler','jelly','crab','puffer'],
-      { kind:'leviathan', name:'Leviathan, the Sea Serpent King', r:92, legend:true } ],
-    [21,'Abyssal Gauntlet',16,10,12,0x252b48,0x090d1b,0x8aa8ff,-6800,'quad',['kraken','eel','angler'],{kind:'sky_crown',name:'Astraeus, the Void Crown',r:96,legend:true,pal:[0x8aa8ff,0xe5f0ff]}],
-    [22,'The Drowned Archive',17,11,13,0x34475a,0x0b1722,0x9be8ff,-7120,'surge',['ghostship','jelly','urchin'],{kind:'sky_archivist',name:'Mnemora, the Star Archivist',r:102,legend:true,pal:[0x9be8ff,0xffffff]}],
-    [23,'Black Coral Cathedral',18,11,14,0x462c56,0x14091c,0xff8fdb,-7440,'shield',['siren','angler','crab'],{kind:'sky_seraph',name:'Vespera, Coral Seraph',r:100,legend:true,pal:[0xff8fdb,0xffd7f2]}],
-    [24,'The Furnace Below',19,12,15,0x623321,0x1c0a05,0xff713b,-7760,'riptide',['dragon','eel','puffer'],{kind:'sky_solar',name:'Heliophage, the Sun-Eater',r:108,legend:true,pal:[0xff713b,0xffdf75]}],
-    [25,'Glacier of Teeth',20,12,16,0x4a6377,0x101c29,0xc9f5ff,-8080,'ripple',['shark','turtle','urchin'],{kind:'sky_frost',name:'Nix-Null, the Frozen Comet',r:112,legend:true,pal:[0xc9f5ff,0xffffff]}],
-    [26,'The Starless Maze',21,13,17,0x32264f,0x0d0718,0xc7a4ff,-8400,'ghost',['hydra','jelly','angler'],{kind:'sky_wraith',name:'The Umbral Choir',r:112,legend:true,pal:[0xc7a4ff,0x6540a8]}],
-    [27,'Throne of Broken Tides',22,13,18,0x254e62,0x07151e,0x65e6ff,-8720,'nova',['serpent','kraken','eel'],{kind:'sky_titan',name:'Pelagor, Sky-Tide Titan',r:118,legend:true,pal:[0x65e6ff,0xd9ffff]}],
-    [28,'The Hollow Moon',23,14,19,0x4b3e72,0x110d24,0xe2c7ff,-9040,'cannon',['ray','siren','angler'],{kind:'sky_moon',name:'Lunaclysm, the Hollow Moon',r:120,legend:true,pal:[0xe2c7ff,0xffffff]}],
-    [29,'Grave of the First Sea',24,14,20,0x343a49,0x080b13,0xc4d6e8,-9360,'shield',['ghostship','charybdis','kraken'],{kind:'sky_reaper',name:'The First Reaper',r:124,legend:true,pal:[0xc4d6e8,0x7d8aa8]}],
-    [30,'The Endless Pressure',25,15,21,0x1d3c50,0x050d15,0x55cfff,-9680,'riptide',['leviathan','serpent','hydra'],{kind:'sky_maelstrom',name:'Vortexion, the Living Maelstrom',r:128,legend:true,pal:[0x55cfff,0x9b7cff]}],
-    [31,'Tempest Engine',26,15,22,0x3d405d,0x0c0d1b,0xffc56f,-13300,'octa',['dragon','ray','eel'],{kind:'sky_tempest',name:'Keraunos, Storm-Heart',r:132,legend:true,pal:[0xffc56f,0xffffff]}],
-    [32,'The Shattered Current',27,16,23,0x27575a,0x06191a,0x78ffe0,-14000,'cannon',['hydra','kraken','siren'],{kind:'sky_prism',name:'Prismarch, the Shattered Current',r:136,legend:true,pal:[0x78ffe0,0xff8fdb]}],
-    [33,'Abyss Without End',28,16,24,0x2b2145,0x080511,0xd59bff,-13600,'ghost',['charybdis','leviathan','angler'],{kind:'sky_null',name:'Nullith, the Unmaking',r:140,legend:true,pal:[0xd59bff,0x3a245f]}],
-    [34,'The Last Horizon',29,17,25,0x263f68,0x060c20,0x9be8ff,-14700,'tsunami',['serpent','dragon','kraken'],{kind:'sky_horizon',name:'Horizara, World-Ender',r:146,legend:true,pal:[0x9be8ff,0xffd36a]}],
-    [35,'Lotan’s End',31,18,28,0x33205d,0x070313,0xffd36a,-15700,'tsunami',['leviathan','hydra','charybdis','dragon'],{kind:'sky_lotan',name:'Leviathan-Lotan, TRUE Final Boss',r:172,legend:true,finalBoss:true,pal:[0xffd36a,0x9b7cff]}]
+  /* A fin shaped like a leaf: pointed at both ends, fat in the middle, with a midrib.
+     (x0,y0) is where it attaches, (x1,y1) is the tip, w is how wide the blade bulges. */
+  function leafFin(g, x0, y0, x1, y1, w, color, fillAlpha, lineW){
+    const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy) || 1;
+    const nx = -dy/len, ny = dx/len;
+    const mx = x0 + dx*0.42, my = y0 + dy*0.42;           // widest point sits a little toward the base
+    const ax = mx + nx*w, ay = my + ny*w, bx = mx - nx*w, by = my - ny*w;
+    g.lineStyle(0);
+    g.beginFill(color, fillAlpha);
+    g.moveTo(x0, y0);
+    g.quadraticCurveTo(ax, ay, x1, y1);
+    g.quadraticCurveTo(bx, by, x0, y0);
+    g.closePath();
+    g.endFill();
+    g.lineStyle({ width: lineW, color, alpha:0.95, ...ROUND });       // crisp leaf outline
+    g.moveTo(x0, y0);
+    g.quadraticCurveTo(ax, ay, x1, y1);
+    g.quadraticCurveTo(bx, by, x0, y0);
+    g.lineStyle({ width: Math.max(0.8, lineW*0.6), color:0xffffff, alpha:0.4, ...ROUND });   // midrib
+    g.moveTo(x0, y0);
+    g.lineTo(x1, y1);
+  }
+
+  /* Same simple wireframe body as before; only the motion changed.
+     A wave now travels head -> tail (still at the nose, biggest at the tail), and the body,
+     tail fin and dorsal/side lines all share it, so the tail stays attached while swimming. */
+  function drawFishShape(g, size, colors, tailPhase, speedFrac, bank, heading){
+    g.clear();
+    const s = size;
+    const speed = clamp(speedFrac, 0, 1);
+    const amp = 0.45 + speed*0.55;
+    const wave = (x) => Math.sin(tailPhase - x*2.4) * amp * Math.pow(x, 1.4);
+
+    const midOff  = wave(0.55) * s*0.16;          // middle of the body
+    const rearOff = wave(0.85) * s*0.30;          // where the body meets the tail
+    const stretch = 1 + speed*0.05;
+
+    const baseX = -s*0.85;
+    const jointX = -s*1.3*stretch, jointY = rearOff + wave(1.1)*s*0.28;
+    const tipX = -s*1.95*stretch,  tipY = jointY + wave(1.3)*s*0.34;
+    // tail: one big leaf whose midrib bends through the joint so it ripples with the swim wave
+    const finLine = Math.max(1.2, s*0.05);
+    g.lineStyle(0);
+    g.beginFill(colors.fin, 0.92);
+    g.moveTo(baseX, rearOff);
+    g.quadraticCurveTo(jointX, jointY - s*0.46, tipX, tipY);
+    g.quadraticCurveTo(jointX, jointY + s*0.46, baseX, rearOff);
+    g.closePath();
+    g.endFill();
+    g.lineStyle({ width: finLine, color: colors.fin, ...ROUND });
+    g.moveTo(baseX, rearOff);
+    g.quadraticCurveTo(jointX, jointY - s*0.46, tipX, tipY);
+    g.quadraticCurveTo(jointX, jointY + s*0.46, baseX, rearOff);
+    g.lineStyle({ width: Math.max(0.8, finLine*0.6), color:0xffffff, alpha:0.4, ...ROUND });
+    g.moveTo(baseX, rearOff);
+    g.quadraticCurveTo(jointX, jointY, tipX, tipY);
+
+    g.lineStyle({ width: Math.max(1.6, s*0.085), color: colors.body, ...ROUND });
+    g.moveTo(s*1.0*stretch, 0);
+    g.quadraticCurveTo(s*0.5, -s*0.60 + midOff*0.6, -s*0.85, -s*0.30 + bank*s*0.15 + rearOff);
+    g.quadraticCurveTo(-s*1.05, rearOff, -s*0.85, s*0.30 - bank*s*0.15 + rearOff);
+    g.quadraticCurveTo(s*0.5, s*0.62 + midOff*0.6, s*1.0*stretch, 0);
+
+    // dorsal fin: a leaf sweeping up and back, fluttering a beat behind the body
+    const flutter = Math.sin(tailPhase*1.3 - 0.8) * 0.12;
+    leafFin(g, s*0.12, -s*0.40 + midOff*0.4,
+               -s*0.42, -s*0.86 + flutter*s*0.5 + midOff*0.5,
+               s*0.2, colors.fin, 0.55, finLine);
+
+    // side fin: a leaf that flaps slowly
+    const row = Math.sin(tailPhase*0.9 + 1.4) * 0.4 + 0.2;
+    leafFin(g, s*0.2, s*0.14,
+               -s*0.22 + row*s*0.1, s*0.68 + row*s*0.15,
+               s*0.18, colors.fin, 0.55, finLine);
+  }
+
+  const SHARK_COLORS = { body:0x9aa6b2, fin:0xcfd8e0 };
+
+  /* ============================= SCHOOLS OF FISH ============================= */
+
+  const schools = [];
+  const SCHOOL_PALETTES = [
+    {name:'Green Chromis', body:0x7fe8d4, fin:0xbdfff0},
+    {name:'Yellow Tang', body:0xffd45e, fin:0xfff0bd},
+    {name:'Blue Cardinalfish', body:0x9ec8ff, fin:0xdceaff},
+    {name:'Pink Anthias', body:0xff8fa3, fin:0xffd6df},
+    {name:'Angelfish', body:0xffe566, fin:0xffeb99},
+    {name:'Clownfish', body:0xff6b35, fin:0xffa366}
   ];
 
-  /* Every cave is strictly bigger than the one before it (maze area), has more guardians, and its boss has
-     more health. The sizes/guard counts in RAW are only a starting point; this pass makes the growth steady. */
-  let prevArea = 0, prevBossHp = 0;
-  const DUNGEONS = RAW.map(([id, name, _mw, _mh, _guards, wall, floor, accent, floatY, ability, enemies, boss])=>{
-    const mh = 4 + Math.floor(id*0.4);
-    let mw = 5 + Math.floor(id*0.6);
-    while(mw*mh <= prevArea) mw++;                         // never smaller than the cave before
-    prevArea = mw*mh;
-    const guards = 3 + id + Math.floor(id/3);              // 4 in cave 1 ... 29 in cave 20
-    // boss health: caves 10+ ramp much harder (longer bars); never lower than the previous boss
-    let bossHp = (id < 10 ? 12 + 3*id : (12 + 4*id)*(1 + 0.08*(id - 9))) * (boss.legend ? (id < 10 ? 1.4 : 1.12) : 1);
-    if(id >= 21) bossHp *= 1.55 + (id - 21)*0.12;
-    if(boss.finalBoss) bossHp *= 5.5;
-    bossHp = Math.max(Math.round(bossHp), prevBossHp + 2);
-    prevBossHp = bossHp;
-    const d = { id, name, x:BIO.dungeonX(id), mw, mh, guards, wall, floor, accent, ability, enemies, boss, bossHp, finalBoss:!!boss.finalBoss };
-    if(floatY) d.floatY = floatY;
-    d.rock = BIO.mixHex(wall, 0x202028, 0.45);          // entrance rock colour
-    d.biome = BIO.biomeForCave(id);
-    d.legend = !!boss.legend;
-    // The Sky Sea has a bespoke environmental identity per dungeon: floor motifs,
-    // hazard families, and a themed hidden vault rather than a palette-only reskin.
-    const SKY_THEMES = [
-      ['Astra Crown Reach','star-runes','gravity wells',0x8aa8ff],
-      ['Archive of Falling Stars','constellations','starlight mines',0x9be8ff],
-      ['Black Coral Basilica','coral-spires','thorn blooms',0xff8fdb],
-      ['Solar Furnace','magma-veins','ember vents',0xff713b],
-      ['Cometglass Glacier','ice-fractures','frost bursts',0xc9f5ff],
-      ['Choir of the Starless','void-sigils','void pulses',0xc7a4ff],
-      ['Broken Tide Throne','tidal-rings','surge currents',0x65e6ff],
-      ['Hollow Moon Grotto','lunar-phases','moon shards',0xe2c7ff],
-      ['First Sea Ossuary','bone-mosaics','soul wisps',0xc4d6e8],
-      ['Endless Pressure Engine','maelstrom-spirals','pressure bursts',0x55cfff],
-      ['Stormheart Foundry','lightning-traces','storm strikes',0xffc56f],
-      ['Prismatic Shatterways','prism-facets','prism beams',0x78ffe0],
-      ['Null Sea Expanse','erasure-marks','null zones',0xd59bff],
-      ['World-End Horizon','horizon-arcs','horizon waves',0x9be8ff],
-      ['Lotan’s Secret Reliquary','ancient-scales','Lotan surge',0xffd36a]
-    ];
-    if(id >= 21){ const sky = SKY_THEMES[id-21]; d.skyTheme = { name:sky[0], motif:sky[1], hazardName:sky[2], hazardColor:sky[3] }; }
-    boss.legend = d.legend;
-    return d;
-  });
-
-  /* Abilities. dur/cd are in frames (60 = 1 s). caveOnly abilities do nothing in the open ocean,
-     so they don't spend their cooldown there. Entries without dur/cd are the original toggles / passives. */
-  const ABILITIES = {
-    shapeshift: { name:'Shapeshift',       key:'F',     desc:'Morph into a shark (bigger, 2x-damage bubbles) or a glass minnow' },
-    dash:       { name:'Tidal Dash',       key:'Shift', desc:'Burst of speed' },
-    glow:       { name:'Biolight',         key:'G',     desc:'Glow to light up dark caves' },
-    shield:     { name:'Bubble Shield',    key:'B',     desc:'Guardians pass right through you' },
-    wings:      { name:'Sea Wings',        key:'Space', desc:'Hold Space in the air to glide' },
-
-    rapid:   { name:'Rapid Bubbles',    key:'Q', dur:360, cd:900,  caveOnly:true,  desc:'Fire bubbles 2.6x faster for 6 s' },
-    triple:  { name:'Triple Shot',      key:'E', dur:480, cd:1080, caveOnly:true,  desc:'Bubbles fly in a 3-way fan for 8 s' },
-    heal:    { name:'Tide Heal',        key:'T',          cd:2700, caveOnly:true,  desc:'Restore 2 hearts, plus 1 for every 2 heart upgrades' },
-    magnet:  { name:'Pearl Magnet',     key:'U', dur:600, cd:1500,                desc:'Pearls fly to you and you eat from further away for 10 s' },
-    camo:    { name:'Camouflage',       key:'C', dur:360, cd:1680, caveOnly:true,  desc:'Guardians and bosses lose track of you for 6 s' },
-    ink:     { name:'Ink Cloud',        key:'Y', dur:360, cd:1320, caveOnly:true,  desc:'A cloud that blinds and slows guardians and eats enemy shots' },
-    whirl:   { name:'Whirlpool',        key:'V', dur:240, cd:1800, caveOnly:true,  desc:'A vortex that drags guardians in and shreds them' },
-    chain:   { name:'Chain Lightning',  key:'Z',          cd:1200, caveOnly:true,  desc:'Zap up to 4 enemies for 2 damage each' },
-    pierce:  { name:'Piercing Bubbles', key:'R', dur:420, cd:1200, caveOnly:true,  desc:'Bubbles punch through enemies and hit twice as hard for 7 s' },
-    sonar:   { name:'Sonar Ping',       key:'O',          cd:1500,                desc:'Reveal the whole cave map (or point to the next cave)' },
-    ripple:  { name:'Time Ripple',      key:'I', dur:240, cd:1800, caveOnly:true,  desc:'Everything hostile slows to 40% for 4 s' },
-    riptide: { name:'Riptide',          key:'P',          cd:1500, caveOnly:true,  desc:'Shockwave: 2 damage and a big shove to everything near you' },
-    ghost:   { name:'Ghost Current',    key:'N', dur:150, cd:2400, caveOnly:true,  desc:'Swim through cave walls for 2.5 s (not during a boss fight)' },
-    cannon:  { name:'Pearl Cannon',     key:'X',          cd:1320, caveOnly:true,  desc:'One giant piercing bubble: 6 damage' },
-    tsunami: { name:'Tsunami',          key:'M',          cd:3600, caveOnly:true,  desc:'A wave wipes enemy shots and hits everything hard' },
-
-    // caves 21+
-    quad:    { name:'Quad Shot',        key:'4', dur:480, cd:1080, caveOnly:true,  desc:'Bubbles fly in a 4-way fan for 8 s' },
-    surge:   { name:'Overdrive',        key:'H', dur:240, cd:1080,                  desc:'A long, fast boost: 2.6x speed for 4 s, in caves and open water (Tidal Dash is only a quick burst)' },
-    nova:    { name:'Nova Burst',       key:'K',          cd:1500, caveOnly:true,  desc:'A blinding ring: 5 damage to everything near you, and it erases enemy shots' },
-    octa:    { name:'Octa Shot',        key:'J', dur:420, cd:1200, caveOnly:true,  desc:'Bubbles fly out in 8 directions at once for 7 s' }
-  };
-  const TIMED = Object.keys(ABILITIES).filter(id => ABILITIES[id].cd);   // the 15 new cooldown abilities
-
-  const FORMS = {
-    fish:   { name:'Reef Fish',    colors:PLAYER_COLORS,                    size:1.0,  speed:1.0,  level:0 },
-    shark:  { name:'Shark',        colors:SHARK_COLORS,                     size:1.55, speed:1.12, level:3 },
-    minnow: { name:'Glass Minnow', colors:{ body:0xbff5ff, fin:0xffffff },  size:0.55, speed:1.4,  level:0 }
-  };
-  const FORM_ORDER = ['fish','shark','minnow'];
-
-  /* ---------------------------------------------------------------- save */
-
-  const save = { cleared:[], form:'fish', glow:false, up:{ hearts:0, rate:0, str:0 } };
-  try{
-    const raw = localStorage.getItem(SAVE_KEY);
-    if(raw) Object.assign(save, JSON.parse(raw));
-    else {
-      const old = JSON.parse(localStorage.getItem(OLD_SAVE_KEY) || 'null');     // carry over a v1 save
-      if(old){
-        save.cleared = (old.cleared || []).map(n => OLD_TO_NEW[n]).filter(Boolean);
-        save.form = old.form || 'fish'; save.glow = !!old.glow;
-      }
+  function spawnSchool(x,y){
+    const palette = SCHOOL_PALETTES[randi(0,SCHOOL_PALETTES.length-1)];
+    const count = randi(5,9);
+    const members = [];
+    for(let i=0;i<count;i++){
+      const g = new PIXI.Graphics();
+      creaturesLayer.addChild(g);
+      attachHoverLabel(g, palette.name, 15);
+      members.push({
+        offAngle: rand(0,Math.PI*2),
+        offRad: rand(8,30),
+        rotSpeed: rand(0.15,0.4) * (Math.random()<0.5?-1:1),
+        phase: rand(0,Math.PI*2),
+        size: rand(6,9),
+        g
+      });
     }
-  }catch(err){}
-  save.up = Object.assign({ hearts:0, rate:0, str:0 }, save.up);
-  function persist(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(save)); }catch(err){} }
-
-  /* --------------------------------------------- level-up upgrades (every 3 levels) */
-
-  const UP_CAP = { hearts:7, rate:8, str:10 };
-  const UP_KEYS = ['hearts', 'rate', 'str'];
-  /* Difficulty (Options menu) scales the caves: guardian count/speed/shooters, boss health, shot speed,
-     how long bosses rest between attacks, hearts, hit-immunity time and the XP you earn. */
-  const DIFF = {
-    peaceful:{ guards:0.5, speed:0.8, shooter:0,   bossHp:0.7, shot:0.85, rest:1.3, hearts:2,  inv:160, xp:0.75 },
-    normal:  { guards:1,   speed:1,   shooter:1,   bossHp:1,   shot:1,    rest:1,   hearts:0,  inv:110, xp:1 },
-    hard:    { guards:1.4, speed:1.2, shooter:1.5, bossHp:1.4, shot:1.15, rest:0.8, hearts:-1, inv:80,  xp:1.25 }
-  };
-  const dif = ()=> DIFF[getDifficulty ? getDifficulty() : 'normal'] || DIFF.normal;
-  const gain = (n, label)=> addXP(Math.max(1, Math.round(n*dif().xp)), label);
-  const maxHp   = ()=> Math.max(3, BASE_HP + save.up.hearts + dif().hearts);
-  const rateMul = ()=> 1 + 0.12*save.up.rate;          // bubble fire rate
-  const strMul  = ()=> 1 + 0.25*save.up.str;           // damage to guardians and bosses
-  const upUsed  = ()=> save.up.hearts + save.up.rate + save.up.str;
-  const upOwed  = ()=> Math.max(0, Math.floor(getLevel()/3) - upUsed());
-  const upOpen  = (k)=> save.up[k] < UP_CAP[k];
-  const UPGRADES = {
-    hearts:{ name:'Bigger Heart',  icon:'♥', desc:'+1 max heart in caves, and heal 1 now',
-             now:()=> `${maxHp()} hearts`,                           next:()=> `${maxHp() + 1} hearts` },
-    rate:  { name:'Bubble Rate',   icon:'○', desc:'Fire bubbles 12% faster',
-             now:()=> `${Math.round(rateMul()*100)}% fire rate`,     next:()=> `${Math.round((rateMul() + 0.12)*100)}% fire rate` },
-    str:   { name:'Strength',      icon:'✦', desc:'+25% damage to guardians and bosses',
-             now:()=> `${Math.round(strMul()*100)}% damage`,         next:()=> `${Math.round((strMul() + 0.25)*100)}% damage` }
-  };
-
-  const has = (id)=> save.cleared.some(n=> DUNGEONS[n-1].ability === id);
-  const unlockedList = ()=> Object.keys(ABILITIES).filter(has);
-  if(!has('shapeshift')) save.form = 'fish';
-
-  /* ---------------------------------------------------------- scene layers */
-
-  const caveC = new PIXI.Container();           // entrances on the seafloor
-  const caveG = new PIXI.Graphics();
-  caveC.addChild(caveG);
-  const dungeonC = new PIXI.Container();        // the maze itself
-  dungeonC.visible = false;
-  const mazeG = new PIXI.Graphics();
-  const entG  = new PIXI.Graphics();
-  const bossG = new PIXI.Graphics();          // the megalodon reuses the original wireframe fish
-  dungeonC.addChild(mazeG, entG, bossG);
-
-  const labels = DUNGEONS.map(d=>{
-    const t = new PIXI.Text('', { fontFamily:'Roboto Mono, monospace', fontSize:15, fill:0xdff6ff,
-                                  stroke:0x000000, strokeThickness:3 });
-    t.anchor.set(0.5, 1);
-    caveC.addChild(t);
-    return t;
-  });
-
-  // insert right above the seafloor, and the maze right below bubbles
-  world.addChildAt(caveC, world.getChildIndex(ctx.terrainG) + 1);
-  world.addChildAt(dungeonC, world.getChildIndex(ctx.bubblesG));
-
-  const auraG = new PIXI.Graphics();
-  app.stage.addChildAt(auraG, app.stage.getChildIndex(ctx.playerG));
-
-  // darkness: a big texture with a clear hole in the middle, scaled to the light radius
-  const darkCanvas = document.createElement('canvas');
-  darkCanvas.width = darkCanvas.height = 512;
-  {
-    const c = darkCanvas.getContext('2d');
-    const gr = c.createRadialGradient(256,256,0, 256,256,256);
-    gr.addColorStop(0,    'rgba(1,6,10,0)');
-    gr.addColorStop(0.10, 'rgba(1,6,10,0)');
-    gr.addColorStop(0.19, 'rgba(1,6,10,0.9)');
-    gr.addColorStop(0.26, 'rgba(1,6,10,1)');
-    gr.addColorStop(1,    'rgba(1,6,10,1)');
-    c.fillStyle = gr; c.fillRect(0,0,512,512);
-  }
-  const darkS = new PIXI.Sprite(PIXI.Texture.from(darkCanvas));
-  darkS.anchor.set(0.5);
-  darkS.visible = false;
-  app.stage.addChild(darkS);
-
-  /* ------------------------------------------------------------------ DOM */
-
-  const bar = document.createElement('div');
-  bar.id = 'ability-bar';
-  document.body.appendChild(bar);
-  const chips = {};
-  for(const id of DUNGEONS.map(d => d.ability)){
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'ability-chip';
-    b.addEventListener('pointerdown', (e)=>{ e.preventDefault(); e.stopPropagation(); activate(id); if(isTouch.matches){ abOpen = false; refreshBar(); } });
-    bar.appendChild(b);
-    chips[id] = b;
-  }
-
-  // on touch devices the ability chips live in a pop-up menu behind one button
-  const isTouch = window.matchMedia ? window.matchMedia('(pointer:coarse)') : { matches:false };
-  const abBtn = document.createElement('button');
-  abBtn.id = 'ability-toggle'; abBtn.type = 'button'; abBtn.textContent = 'Abilities'; abBtn.style.display = 'none';
-  abBtn.addEventListener('pointerdown', (e)=>{ e.preventDefault(); e.stopPropagation(); abOpen = !abOpen; refreshBar(); });
-  document.body.appendChild(abBtn);
-  let abOpen = false;
-
-  const mapEl = document.createElement('canvas');
-  mapEl.id = 'dungeon-map';
-  document.body.appendChild(mapEl);
-  const mapCtx = mapEl.getContext('2d');
-
-  const banner = document.createElement('div');
-  banner.id = 'ability-banner';
-  banner.innerHTML = '<div class="ab-small"></div><div class="ab-big"></div><div class="ab-desc"></div>';
-  document.body.appendChild(banner);
-  function showBanner(small, big, desc){
-    banner.children[0].textContent = small;
-    banner.children[1].textContent = big;
-    banner.children[2].textContent = desc || '';
-    banner.classList.remove('show'); void banner.offsetWidth; banner.classList.add('show');
-  }
-
-  const waterBgEl = document.getElementById('water-bg');
-
-  const caveHud = document.createElement('div');
-  caveHud.id = 'cave-hud'; caveHud.style.display = 'none';
-  document.body.appendChild(caveHud);
-
-  const upMenu = document.createElement('div');
-  upMenu.id = 'upgrade-menu'; upMenu.style.display = 'none';
-  upMenu.innerHTML = '<div class="up-box"><div class="up-small"></div><div class="up-big">Choose an upgrade</div><div class="up-cards"></div><div class="up-note">Click a card or press 1, 2 or 3</div></div>';
-  document.body.appendChild(upMenu);
-  const upSmall = upMenu.querySelector('.up-small'), upCards = upMenu.querySelector('.up-cards');
-  let menuOpen = false, menuDelay = -1;
-
-  function openUpgradeMenu(){
-    menuOpen = true;
-    hideHoverLabel();
-    keys.left = keys.right = keys.up = keys.down = keys.space = false;
-    const n = upOwed();
-    upSmall.textContent = `Level ${getLevel()} · ${n} upgrade${n > 1 ? 's' : ''} to pick`;
-    upCards.innerHTML = '';
-    UP_KEYS.forEach((k, i)=>{
-      const u = UPGRADES[k], open = upOpen(k), btn = document.createElement('button');
-      btn.type = 'button'; btn.className = 'up-card' + (open ? '' : ' maxed'); btn.disabled = !open;
-      btn.innerHTML = `<div class="up-key">${i + 1}</div><div class="up-icon">${u.icon}</div><div class="up-name">${u.name}</div>` +
-        `<div class="up-desc">${u.desc}</div><div class="up-stat">${open ? `${u.now()} → ${u.next()}` : 'MAXED'}</div>` +
-        `<div class="up-lvl">${save.up[k]} / ${UP_CAP[k]}</div>`;
-      btn.addEventListener('click', ()=> chooseUpgrade(k));
-      upCards.appendChild(btn);
-    });
-    upMenu.style.display = 'flex';
-  }
-
-  function chooseUpgrade(k){
-    if(!menuOpen || !upOpen(k)) return;
-    save.up[k]++;
-    if(k === 'hearts' && M){ M.php = Math.min(maxHp(), M.php + 1); caveHud._key = null; }
-    persist();
-    menuOpen = false; upMenu.style.display = 'none';
-    menuDelay = upOwed() > 0 ? 15 : -1;                   // another pick waiting? show it right after
-    burstBubbles(player.x, player.y, 16); playBlip();
-    popText(UPGRADES[k].name + '!', 'flip');
-  }
-
-  function resetUpgrades(){ save.up = { hearts:0, rate:0, str:0 }; persist(); if(M) caveHud._key = null; }
-
-  function updateUpgradeOffer(dt){
-    if(menuOpen || !isStarted()) return;
-    if(upOwed() > 0 && UP_KEYS.some(upOpen)){
-      if(menuDelay < 0) menuDelay = 100;                  // let the level-up banner play first
-      menuDelay -= dt;
-      if(menuDelay <= 0){ menuDelay = -1; openUpgradeMenu(); }
-    } else menuDelay = -1;
-  }
-
-  const compass = document.createElement('div');
-  compass.id = 'cave-compass'; compass.style.display = 'none';
-  compass.innerHTML = '<div class="cc-arrow">▲</div><div class="cc-label"></div><div class="cc-where"></div>';
-  document.body.appendChild(compass);
-  const ccArrow = compass.children[0], ccLabel = compass.children[1], ccWhere = compass.children[2];
-
-  // edge-of-screen arrow pointing at the nearest cave you haven't cleared yet
-  // caves 21-30 float in the upturned sea; 31-35 drift in deep space (above the rock crust at y = -12400, see sky.js)
-  const SPACE_CAVE_Y = -12400, INV_SEA_Y = -6500;
-  const placeOf = (d)=> !d.floatY ? 'on the seafloor'
-    : d.floatY < SPACE_CAVE_Y ? `drifting in deep space, ${Math.round(-d.floatY/8)} m up`
-    : d.floatY < INV_SEA_Y ? `floating in the upturned sea, ${Math.round(-d.floatY/8)} m up`
-    : `floats ~${Math.round(d.floatY/8)} m deep`;
-  const regionOf = (d)=> d.floatY && d.floatY < SPACE_CAVE_Y ? 'Deep Space' : d.floatY && d.floatY < INV_SEA_Y ? 'Upturned Sea' : d.biome.name;
-
-  function updateCompass(){
-    if(!isStarted() || active){ compass.style.display = 'none'; return; }
-    const best = nextCave();                              // the lowest-numbered cave you haven't cleared
-    if(!best){ compass.style.display = 'none'; return; }
-    const bd = Math.hypot(best.x - player.x, mouthY(best) - player.y);
-    const W = app.screen.width, H = app.screen.height;
-    const dx = best.x - player.x, dy = mouthY(best) - player.y;
-    if(Math.abs(dx) < W/2 - 110 && Math.abs(dy) < H/2 - 70){ compass.style.display = 'none'; return; }
-    const k = Math.min((W/2 - 110)/Math.max(Math.abs(dx), 1), (H/2 - 70)/Math.max(Math.abs(dy), 1));
-    compass.style.display = 'block';
-    compass.style.left = (W/2 + dx*k) + 'px';
-    compass.style.top = (H/2 + dy*k) + 'px';
-    ccArrow.style.transform = `rotate(${Math.atan2(dy, dx) + Math.PI/2}rad)`;
-    ccLabel.textContent = `Next: ${best.id}. ${best.name} · ${Math.round(bd/8)} m`;
-    ccWhere.textContent = regionOf(best) + ' · ' + placeOf(best);
-  }
-
-  /* ----------------------------------------------------------- abilities */
-
-  let dashT = 0, dashCd = 0, shieldT = 0, shieldCd = 0, formCd = 0, invuln = 0, enterCd = 0;
-  let lightR = 330;
-  const TM = {}, CD = {};                                     // active time left / cooldown left for the 15 timed abilities
-  TIMED.forEach(id => { TM[id] = 0; CD[id] = 0; });
-  const KEYMAP = {};
-  for(const id of Object.keys(ABILITIES)){
-    const k = ABILITIES[id].key;
-    if(k !== 'Space') KEYMAP[k.length === 1 ? k.toUpperCase() : k] = id;
-  }
-  const nextCave = ()=> DUNGEONS.find(d => !save.cleared.includes(d.id)) || null;
-
-  function activate(id){
-    if(!isStarted() || !has(id)) return;
-    if(TIMED.includes(id)){ useTimed(id); return; }
-    if(id === 'shapeshift'){
-      if(formCd > 0) return;
-      formCd = 25;
-      save.form = FORM_ORDER[(FORM_ORDER.indexOf(save.form) + 1) % FORM_ORDER.length];
-      persist();
-      burstBubbles(player.x, player.y, 14);
-      popText(FORMS[save.form].name, 'flip');
-      playBlip();
-    } else if(id === 'dash'){
-      if(dashCd > 0) return;
-      const a = player.displayAngle;
-      dashT = 14; dashCd = 110;
-      player.vx += Math.cos(a) * 12; player.vy += Math.sin(a) * 12;
-      burstBubbles(player.x, player.y, 12);
-      playBlip();
-    } else if(id === 'glow'){
-      save.glow = !save.glow; persist();
-      popText(save.glow ? 'Biolight on' : 'Biolight off', 'flip');
-    } else if(id === 'shield'){
-      if(shieldCd > 0 || shieldT > 0) return;
-      shieldT = 300; shieldCd = 720;
-      burstBubbles(player.x, player.y, 16);
-      popText('Bubble Shield!', 'flip');
-      playBlip();
-    } else if(id === 'wings'){
-      popText('Hold Space in the air to glide', 'flip');
-    }
-  }
-
-  /* ---- the 15 cooldown abilities ---- */
-
-  function useTimed(id){
-    const ab = ABILITIES[id];
-    if(ab.caveOnly && !(active && M)){ popText(ab.name + ' only works inside caves', 'warn'); return; }
-    if(CD[id] > 0) return;
-    if(!EFFECTS[id]()) return;                    // an effect may refuse (full health, no target) without spending its cooldown
-    CD[id] = ab.cd; TM[id] = ab.dur || 0;
-    burstBubbles(player.x, player.y, 12);
-    if(!(id === 'sonar' && !active)) popText(ab.name + '!', 'flip');       // open-water sonar prints its own message
-    playBlip();
-  }
-
-  function damageBoss(n){
-    const b = M.boss;
-    if(!b.active || b.dead) return;
-    if(b.shieldT > 0) return;                                    // shield phase: nothing gets through
-    b.hp -= n*strMul()*(1 - (b.armor || 0)); b.hit = 6;          // Strength upgrade adds, elite armor subtracts
-    if(b.hp <= 0) killBoss();
-  }
-  function hurtGuard(k, n){
-    const e = M.guards[k];
-    e.hp -= n*strMul();
-    if(e.hp > 0) return false;
-    M.guards.splice(k, 1); burstBubbles(e.x, e.y, 8); gain(2 + M.d.id);
-    return true;
-  }
-  function openAhead(dist){                       // the farthest open point in front of the player, up to dist
-    const a = player.displayAngle;
-    for(let d = dist; d > 0; d -= 30){
-      const x = player.x + Math.cos(a)*d, y = player.y + Math.sin(a)*d;
-      if(!isWall(Math.floor(x/T), Math.floor(y/T))) return { x, y };
-    }
-    return { x:player.x, y:player.y };
-  }
-  const ringFx = (x, y, r1, col, life)=> M.fx.push({ type:'ring', x, y, r1, col, life:life || 30, max:life || 30 });
-
-  const EFFECTS = {
-    rapid:  ()=> true,
-    triple: ()=> true,
-    pierce: ()=> true,
-    quad:   ()=> true,
-    octa:   ()=> true,
-    surge:  ()=> {                                 // Overdrive: a hard shove now, then 2.6x speed while it lasts (see speedMul)
-      const a = player.displayAngle;
-      player.vx += Math.cos(a)*16; player.vy += Math.sin(a)*16;
-      return true;
-    },
-    nova:   ()=> {
-      ringFx(player.x, player.y, 520, 0xfff2b0, 36);
-      for(let k = M.guards.length - 1; k >= 0; k--){
-        if(Math.hypot(M.guards[k].x - player.x, M.guards[k].y - player.y) < 520) hurtGuard(k, 5);
-      }
-      const b = M.boss;
-      if(b.active && !b.dead && Math.hypot(b.x - player.x, b.y - player.y) < 520 + b.r) damageBoss(5);
-      for(let i = M.shots.length - 1; i >= 0; i--) if(Math.hypot(M.shots[i].x - player.x, M.shots[i].y - player.y) < 520) M.shots.splice(i, 1);
-      return true;
-    },
-    camo:   ()=> true,
-    magnet: ()=> true,
-    ripple: ()=> { ringFx(player.x, player.y, 460, 0x9be8ff); return true; },
-    heal:   ()=> {
-      if(M.php >= maxHp()){ popText('Already at full health', 'warn'); return false; }
-      const healAmount = 2 + Math.floor((save.up.hearts || 0) / 2);
-      M.php = Math.min(maxHp(), M.php + healAmount); caveHud._key = null;
-      ringFx(player.x, player.y, 200, 0x7dff9e);
-      return true;
-    },
-    ink:    ()=> { M.ink = { x:player.x, y:player.y, r:230, life:360 }; return true; },
-    whirl:  ()=> { const p = openAhead(240); M.vortex = { x:p.x, y:p.y, life:240, tick:0 }; return true; },
-    chain:  ()=> {
-      const near = M.guards.map(e => ({ e, d:Math.hypot(e.x - player.x, e.y - player.y) }))
-                           .filter(o => o.d < 560).sort((a, b) => a.d - b.d).slice(0, 4);
-      const b = M.boss;
-      if(b.active && !b.dead && Math.hypot(b.x - player.x, b.y - player.y) < 720) near.push({ boss:true, e:b });
-      if(!near.length){ popText('Nothing in range', 'warn'); return false; }
-      let px = player.x, py = player.y;
-      for(const o of near){
-        M.fx.push({ type:'bolt', x0:px, y0:py, x1:o.e.x, y1:o.e.y, life:16, max:16 });
-        px = o.e.x; py = o.e.y;
-      }
-      for(const o of near){
-        if(o.boss) damageBoss(2);
-        else { const k = M.guards.indexOf(o.e); if(k >= 0) hurtGuard(k, 2); }
-      }
-      return true;
-    },
-    sonar:  ()=> {
-      if(active && M){
-        for(const row of M.seen) row.fill(true);
-        M.sonarT = 420; ringFx(player.x, player.y, 600, 0x9be8ff, 40);
-      } else {
-        const n = nextCave();
-        if(!n) popText('Sonar: every cave is cleared!', 'flip');
-        else {
-          const dx = n.x - player.x;
-          popText(`Sonar: ${n.name} is ${Math.round(Math.abs(dx)/8)} m ${dx > 0 ? 'east' : 'west'}`, 'flip');
-        }
-      }
-      return true;
-    },
-    riptide: ()=> {
-      ringFx(player.x, player.y, 360, 0xcff6ff, 24);
-      for(let k = M.guards.length - 1; k >= 0; k--){
-        const e = M.guards[k];
-        if(Math.hypot(e.x - player.x, e.y - player.y) > 360) continue;
-        const a = Math.atan2(e.y - player.y, e.x - player.x);
-        if(!hurtGuard(k, 2)){ e.vx += Math.cos(a)*7; e.vy += Math.sin(a)*7; }
-      }
-      const b = M.boss;
-      if(b.active && !b.dead && Math.hypot(b.x - player.x, b.y - player.y) < 360 + b.r) damageBoss(2);
-      for(let i = M.shots.length - 1; i >= 0; i--) if(Math.hypot(M.shots[i].x - player.x, M.shots[i].y - player.y) < 360) M.shots.splice(i, 1);
-      return true;
-    },
-    ghost:  ()=> {
-      if(M.sealed){ popText('The boss has sealed the walls', 'warn'); return false; }
-      return true;
-    },
-    cannon: ()=> {
-      const a = player.displayAngle;
-      M.bubs.push({ x:player.x + Math.cos(a)*26, y:player.y + Math.sin(a)*26, vx:Math.cos(a)*11, vy:Math.sin(a)*11,
-                    life:100, r:24, dmg:6, pierce:true, hits:[], big:true });
-      return true;
-    },
-    tsunami: ()=> {
-      M.fx.push({ type:'wave', x:player.x, y:player.y, r1:1100, life:50, max:50 });
-      M.shots.length = 0;
-      for(let k = M.guards.length - 1; k >= 0; k--) hurtGuard(k, 4);
-      damageBoss(Math.max(4, Math.ceil(M.boss.max*0.1)));
-      return true;
-    }
-  };
-
-  function handleKey(e){
-    if(!isStarted()) return false;
-    if(menuOpen){                                                // the upgrade menu eats every key
-      const i = ['1', '2', '3'].indexOf(e.key);
-      if(i >= 0) chooseUpgrade(UP_KEYS[i]);
-      return true;
-    }
-    if(e.key === 'Escape' && active){ exitDungeon(false); return true; }
-    if(e.repeat || e.ctrlKey || e.metaKey || e.altKey) return false;
-    const id = KEYMAP[e.key.length === 1 ? e.key.toUpperCase() : e.key];
-    if(!id || id === 'wings' || !has(id)) return false;
-    activate(id);
-    return true;
-  }
-
-  const look = ()=> FORMS[save.form] || FORMS.fish;
-
-  // [time left, full cooldown] and "is it running right now" for every chip
-  const cdOf = (id)=> id === 'dash' ? [dashCd, 110] : id === 'shield' ? [shieldCd, 720] : TIMED.includes(id) ? [CD[id], ABILITIES[id].cd] : [0, 1];
-  const onOf = (id)=> id === 'glow' ? save.glow : id === 'shield' ? shieldT > 0 : id === 'dash' ? dashT > 0 : TIMED.includes(id) ? TM[id] > 0 : false;
-
-  function refreshBar(){
-    const list = unlockedList();
-    const touch = isTouch.matches, have = isStarted() && list.length > 0;
-    abBtn.style.display = (touch && have) ? 'block' : 'none';
-    bar.classList.toggle('menu', touch);
-    if(!touch) abOpen = false;
-    bar.style.display = have && (!touch || abOpen) ? 'flex' : 'none';
-    abBtn.classList.toggle('open', abOpen);
-    if(!list.length) return;
-    let anyOn = false;
-    for(const id of Object.keys(ABILITIES)){
-      const el = chips[id], ab = ABILITIES[id];
-      if(!has(id)){ el.style.display = 'none'; continue; }
-      el.style.display = '';
-      const [left, full] = cdOf(id);
-      const waiting = left > 0 && !(id === 'shield' && shieldT > 0);
-      let cls = 'ability-chip';
-      if(onOf(id)) { cls += ' on'; anyOn = true; }
-      else if(waiting) cls += ' cd';
-      if(el.className !== cls) el.className = cls;
-      const pct = waiting ? Math.round(100*(1 - left/full)) : 100;
-      if(el._pct !== pct){ el._pct = pct; el.style.setProperty('--cd', pct + '%'); }
-      let txt = `[${ab.key}] ${ab.name}`;
-      if(id === 'shapeshift') txt += ' · ' + look().name;
-      if(waiting && full > 60) txt += ' · ' + Math.ceil(left/60) + 's';
-      if(el.textContent !== txt){ el.textContent = txt; el.title = ab.desc; }
-    }
-    abBtn.classList.toggle('active', anyOn);
-  }
-
-  function drawAura(now){
-    auraG.clear();
-    auraG.x = app.screen.width/2 + view.ox;
-    auraG.y = app.screen.height/2 + player.bob + view.oy;
-    const s = player.size * look().size;
-    const fade = (TM.camo > 0 || TM.ghost > 0) ? 0.4 : 1;           // camouflage / ghost current make you see-through
-    if(ctx.playerG.alpha !== fade) ctx.playerG.alpha = fade;
-    if(save.glow && has('glow')){
-      const p = 0.5 + 0.5*Math.sin(now*0.004);
-      for(let i=4;i>=1;i--){
-        auraG.beginFill(0x9be8ff, 0.05 + 0.02*p);
-        auraG.drawCircle(0, 0, s*(1.2 + i*0.9 + p*0.25));
-        auraG.endFill();
-      }
-    }
-    if(shieldT > 0){
-      const flick = shieldT < 70 && Math.floor(shieldT/5)%2 === 0 ? 0.4 : 1;
-      auraG.lineStyle(2.5, 0xcff6ff, 0.8*flick);
-      auraG.beginFill(0x9be8ff, 0.12*flick);
-      auraG.drawCircle(0, 0, s*2.1);
-      auraG.endFill();
-    }
-    auraG.lineStyle(0);
-    if(TM.ripple > 0){
-      auraG.lineStyle(2, 0x9be8ff, 0.35);
-      auraG.drawCircle(0, 0, s*(2.6 + 0.4*Math.sin(now*0.01)));
-    }
-    if(TM.magnet > 0){
-      auraG.lineStyle(1.5, 0xffe28a, 0.4);
-      auraG.drawCircle(0, 0, s*(3.2 - 0.6*((now*0.004) % 1)));
-    }
-    if(TM.rapid > 0 || TM.triple > 0 || TM.pierce > 0 || TM.quad > 0 || TM.octa > 0){
-      auraG.lineStyle(2, TM.pierce > 0 ? 0xffd36a : 0xcff6ff, 0.5);
-      auraG.drawCircle(Math.cos(player.displayAngle)*s*1.5, Math.sin(player.displayAngle)*s*1.5, s*0.35);
-    }
-    auraG.lineStyle(0);
-    if(TM.surge > 0){                                              // Overdrive: a golden comet tail
-      const ca = Math.cos(player.displayAngle), sa = Math.sin(player.displayAngle);
-      for(let i=1;i<=5;i++){
-        auraG.beginFill(0xffd36a, 0.2 - i*0.03);
-        auraG.drawCircle(-ca*s*(0.7 + i*0.95), -sa*s*(0.7 + i*0.95), s*(1.05 - i*0.12));
-        auraG.endFill();
-      }
-    }
-    if(dashT > 0){
-      auraG.beginFill(0xffffff, 0.18);
-      auraG.drawCircle(-Math.cos(player.displayAngle)*s, -Math.sin(player.displayAngle)*s, s*0.9);
-      auraG.endFill();
-    }
-  }
-
-  /* ------------------------------------------------------- overworld caves */
-
-  const baseY = (d)=> floorY(d.x);
-  const mouthY = (d)=> d.floatY ? d.floatY : baseY(d) - 50;          // centre of the cave mouth
-  const exitPos = (d, dx)=> ({ x:d.x + dx, y: d.floatY ? d.floatY : baseY(d) - 70 });
-
-  function drawEntrances(now){
-    caveG.clear();
-    DUNGEONS.forEach((d, i)=>{
-      const lab = labels[i], fl = !!d.floatY, my = mouthY(d);
-      if(Math.abs(player.x - d.x) > 2400 || Math.abs(player.y - my) > 2400){ lab.visible = false; return; }
-      lab.visible = true;
-      const by = baseY(d), done = save.cleared.includes(d.id);
-      caveG.lineStyle(2, 0x1c1c22, 0.7);
-      caveG.beginFill(d.rock);
-      const N = 20;
-      if(!fl){
-        caveG.moveTo(d.x - 190, by + 20);
-        for(let k=0;k<=N;k++){
-          const a = Math.PI - (k/N)*Math.PI, bump = 1 + Math.sin(k*2.7 + d.id)*0.07;
-          caveG.lineTo(d.x + Math.cos(a)*190*bump, by + 10 - Math.sin(a)*210*bump);
-        }
-        caveG.lineTo(d.x + 190, by + 20);
-      } else {
-        // a floating rock with dripping stalactites underneath
-        for(let k=0;k<N;k++){
-          const a = (k/N)*Math.PI*2, sn = Math.sin(a), bump = 1 + Math.sin(k*2.3 + d.id)*0.08;
-          const ry = sn > 0 ? (k%2 ? 150 : 100) : 105;
-          const px = d.x + Math.cos(a)*175*bump, py = my + sn*ry*bump;
-          k ? caveG.lineTo(px, py) : caveG.moveTo(px, py);
-        }
-      }
-      caveG.closePath(); caveG.endFill();
-      if(fl){
-        caveG.lineStyle(0);
-        for(let k=0;k<4;k++){          // drifting pebbles
-          const a = now*0.0008*(k%2?1:-1) + k*1.6;
-          caveG.beginFill(0x4a4458, 0.9); caveG.drawCircle(d.x + Math.cos(a)*(235+k*14), my + Math.sin(a)*(130+k*8), 6 + k*2); caveG.endFill();
-        }
-      }
-      caveG.lineStyle(0);
-      caveG.beginFill(0x010609);
-      caveG.drawEllipse(d.x, my, 62, 56);
-      caveG.endFill();
-      const pulse = 0.55 + 0.35*Math.sin(now*0.003 + d.id);
-      caveG.lineStyle(4, done ? 0xffe28a : d.accent, pulse);
-      caveG.drawEllipse(d.x, my, 66, 60);
-      if(d.legend){ caveG.lineStyle(2, 0xffd36a, 0.35 + 0.3*Math.sin(now*0.004 + d.id)); caveG.drawEllipse(d.x, my, 78, 72); }   // legends get a golden second ring
-      lab.text = (done ? '★ ' : '') + (d.legend ? '✦ ' : '') + d.id + '. ' + d.name;
-      lab.style.fill = d.legend ? 0xffd36a : 0xdff6ff;
-      lab.x = d.x; lab.y = my - (fl ? 138 : 175);
+    schools.push({
+      type:'school',
+      x, y,
+      vx: rand(-1,1), vy: rand(-0.3,0.3),
+      targetX: x + rand(-300,300),
+      targetY: clamp(y + rand(-200,200), WORLD_TOP_MARGIN+60, 7500),
+      retarget: rand(120,260),
+      speed: rand(1.0,1.8),
+      palette,
+      members
     });
   }
 
-  function checkEnter(){
-    if(enterCd > 0) return; // Floating Sky Sea entrances are far above y=0; they must remain enterable.
-    for(const d of DUNGEONS){
-      const dx = player.x - d.x, dy = player.y - mouthY(d);
-      if(dx*dx + dy*dy < 55*55){ enterDungeon(d); return; }
+  function updateSchool(s, dt){
+    s.retarget -= dt;
+    if(s.retarget <= 0){
+      s.targetX = s.x + rand(-350,350);
+      s.targetY = clamp(s.y + rand(-220,220), WORLD_TOP_MARGIN+60, 7500);
+      s.retarget = rand(140,300);
+    }
+    const dx = s.targetX - s.x, dy = s.targetY - s.y;
+    const d = Math.hypot(dx,dy) || 1;
+    s.vx = lerp(s.vx, (dx/d) * s.speed, 0.02*dt);
+    s.vy = lerp(s.vy, (dy/d) * s.speed, 0.02*dt);
+    s.x += s.vx*dt;
+    s.y += s.vy*dt;
+    s.y = clamp(s.y, WORLD_TOP_MARGIN+20, 7500);
+
+    const heading = Math.atan2(s.vy, s.vx);
+    for(const m of s.members){
+      m.offAngle += m.rotSpeed*0.02*dt;
+      m.phase += 0.18*dt;
+
+      const mx = s.x + Math.cos(m.offAngle)*m.offRad;
+      const my = s.y + Math.sin(m.offAngle)*m.offRad*0.6;
+      m.g.x = mx; m.g.y = my; orient(m.g, heading);
+      drawFishShape(m.g, m.size, s.palette, m.phase, 0.8, Math.sin(m.offAngle)*0.3);
     }
   }
 
-  /* ------------------------------------------------------------- the maze */
-
-  let active = false;
-  let M = null;
-
-  function genMaze(mw, mh, big, id){
-    const W0 = mw*2+1, H0 = mh*2+1;
-    const g0 = Array.from({length:H0}, ()=> new Array(W0).fill(1));
-    const open = Array.from({length:mh}, ()=> Array.from({length:mw}, ()=> []));
-    const vis = Array.from({length:mh}, ()=> new Array(mw).fill(false));
-    const st = [[0,0]]; vis[0][0] = true; g0[1][1] = 0;
-    while(st.length){
-      const [cx,cy] = st[st.length-1];
-      const nb = [[1,0],[-1,0],[0,1],[0,-1]].map(d=>[cx+d[0], cy+d[1]])
-        .filter(([x,y])=> x>=0 && y>=0 && x<mw && y<mh && !vis[y][x]);
-      if(!nb.length){ st.pop(); continue; }
-      const [nx,ny] = nb[randi(0, nb.length-1)];
-      vis[ny][nx] = true;
-      g0[ny*2+1][nx*2+1] = 0;
-      g0[cy+ny+1][cx+nx+1] = 0;
-      open[cy][cx].push([nx,ny]); open[ny][nx].push([cx,cy]);
-      st.push([nx,ny]);
-    }
-    const dist = Array.from({length:mh}, ()=> new Array(mw).fill(-1));
-    const q = [[0,0]]; dist[0][0] = 0;
-    for(let i=0;i<q.length;i++){
-      const [x,y] = q[i];
-      for(const [nx,ny] of open[y][x]) if(dist[ny][nx] < 0){ dist[ny][nx] = dist[y][x]+1; q.push([nx,ny]); }
-    }
-    // the boss arena hangs off the right edge, behind the farthest cell of the last column
-    let best = [mw-1, 0];
-    for(let y=0;y<mh;y++) if(dist[y][mw-1] > dist[best[1]][best[0]]) best = [mw-1, y];
-    const AW = (big ? 12 : 9) + Math.floor(id/5), AH = (big ? 9 : 7) + Math.floor(id/8), W = W0 + AW + 1, H = Math.max(H0, AH + 2);   // legends get a bigger arena
-    const g = Array.from({length:H}, ()=> new Array(W).fill(1));
-    for(let y=0;y<H0;y++) for(let x=0;x<W0;x++) g[y][x] = g0[y][x];
-    const doorY = best[1]*2+1, top = clamp(doorY - (AH >> 1), 1, H - AH - 1);
-    for(let y=top; y<top+AH; y++) for(let x=W0; x<W0+AW; x++) g[y][x] = 0;
-    g[doorY][W0-1] = 0;
-    return { W, H, g, open, dist, orbCell:best, door:{ x:W0-1, y:doorY }, arena:{ x0:W0, y0:top, w:AW, h:AH } };
+  function destroySchool(s){
+    for(const m of s.members){ creaturesLayer.removeChild(m.g); m.g.destroy(); }
   }
 
-  const cellPos = (cx,cy)=> ({ x:(cx*2+1.5)*T, y:(cy*2+1.5)*T });
+  /* ============================= JELLYFISH ============================= */
 
-  function buildMazeGraphics(d, m){
-    mazeG.clear();
-    mazeG.beginFill(d.floor); mazeG.drawRect(0,0,m.W*T,m.H*T); mazeG.endFill();
-    const wall = (x,y)=> y<0||x<0||y>=m.H||x>=m.W|| m.g[y][x]===1;
-    for(let y=0;y<m.H;y++) for(let x=0;x<m.W;x++){
-      if(m.g[y][x] === 1){
-        mazeG.beginFill(d.wall); mazeG.drawRect(x*T, y*T, T, T); mazeG.endFill();
-      } else if((x+y)%2 === 0){
-        mazeG.beginFill(0xffffff, 0.03); mazeG.drawRect(x*T, y*T, T, T); mazeG.endFill();
-      }
-    }
-    if(d.skyTheme){
-      // Deterministic ornament makes every floating dungeon visually distinct.
-      for(let y=1;y<m.H-1;y++) for(let x=1;x<m.W-1;x++){
-        if(m.g[y][x] !== 0) continue;
-        const h = Math.abs(Math.sin(x*12.9898 + y*78.233 + d.id*37.719));
-        const px=(x+0.5)*T, py=(y+0.5)*T;
-        if((x*3+y*5+d.id)%11===0){
-          mazeG.lineStyle(2, d.skyTheme.hazardColor, 0.14+0.08*Math.sin(x+y));
-          if(d.id%4===1){ mazeG.drawCircle(px,py,12+h*9); mazeG.drawCircle(px,py,22+h*10); }
-          else if(d.id%4===2){ mazeG.moveTo(px-15,py+10); mazeG.lineTo(px,py-15); mazeG.lineTo(px+15,py+10); }
-          else if(d.id%4===3){ mazeG.moveTo(px-17,py); mazeG.lineTo(px+17,py); mazeG.moveTo(px,py-17); mazeG.lineTo(px,py+17); }
-          else { mazeG.moveTo(px-15,py-10); mazeG.lineTo(px+15,py+10); mazeG.moveTo(px+15,py-10); mazeG.lineTo(px-15,py+10); }
-        }
-        if((x*7+y*2+d.id)%17===0){ mazeG.lineStyle(0); mazeG.beginFill(d.skyTheme.hazardColor,0.13); mazeG.drawCircle(px,py,4+h*4); mazeG.endFill(); }
-      }
-    }
-    mazeG.lineStyle(3, d.accent, 0.4);
-    for(let y=0;y<m.H;y++) for(let x=0;x<m.W;x++){
-      if(m.g[y][x] !== 1) continue;
-      if(!wall(x,y-1)){ mazeG.moveTo(x*T, y*T);       mazeG.lineTo((x+1)*T, y*T); }
-      if(!wall(x,y+1)){ mazeG.moveTo(x*T, (y+1)*T);   mazeG.lineTo((x+1)*T, (y+1)*T); }
-      if(!wall(x-1,y)){ mazeG.moveTo(x*T, y*T);       mazeG.lineTo(x*T, (y+1)*T); }
-      if(!wall(x+1,y)){ mazeG.moveTo((x+1)*T, y*T);   mazeG.lineTo((x+1)*T, (y+1)*T); }
-    }
-    if(d.skyTheme && m.vaultRoom){
-      const r=m.vaultRoom;
-      mazeG.lineStyle(3,d.skyTheme.hazardColor,0.75);
-      mazeG.drawRect(r.left*T+5,r.top*T+5,(r.right-r.left+1)*T-10,(r.bottom-r.top+1)*T-10);
-      mazeG.lineStyle(0); mazeG.beginFill(d.skyTheme.hazardColor,0.08);
-      mazeG.drawRect((r.left+1)*T,(r.top+1)*T,(r.right-r.left-1)*T,(r.bottom-r.top-1)*T); mazeG.endFill();
-      // A brighter lintel marks the vault's only entrance without exposing the chest.
-      mazeG.lineStyle(4,d.skyTheme.hazardColor,0.65);
-      mazeG.moveTo((r.left+1)*T,r.bottom*T); mazeG.lineTo((r.left+2)*T,r.bottom*T);
-      mazeG.lineTo((r.left+3)*T,r.bottom*T);
-    }
-  }
+  const JELLY_COLORS = [0xd59bff, 0xff9bd2, 0x9bd2ff, 0xc8ffe0, 0xffc8ff, 0xb3d9ff];
 
-  function setDoor(closed){ M.m.g[M.m.door.y][M.m.door.x] = closed ? 1 : 0; buildMazeGraphics(M.d, M.m); }
-
-  function enterDungeon(d){
-    const m = genMaze(d.mw, d.mh, d.legend, d.id);
-    buildMazeGraphics(d, m);
-
-    let treasure = null;
-    if(d.skyTheme){
-      // A real optional side chamber inside the boss arena. Its chest only awakens
-      // after the boss falls, so the player can explore it before claiming the relic.
-      const A = m.arena, left=A.x0+A.w-6, right=A.x0+A.w-1, top=A.y0+1, bottom=A.y0+5;
-      for(let x=left;x<=right;x++){ m.g[top][x]=1; m.g[bottom][x]=1; }
-      for(let y=top;y<=bottom;y++){ m.g[y][left]=1; m.g[y][right]=1; }
-      m.g[bottom][left+2]=0; // doorway facing the arena
-      for(let y=top+1;y<bottom;y++) for(let x=left+1;x<right;x++) m.g[y][x]=0;
-      m.vaultRoom={left,top,right,bottom};
-      treasure={x:(left+2.5)*T,y:(top+2.5)*T,got:false,active:false,room:m.vaultRoom};
-      buildMazeGraphics(d,m);
-    }
-    const pearls = [], cells = [];
-    for(let cy=0; cy<d.mh; cy++) for(let cx=0; cx<d.mw; cx++){
-      cells.push([cx,cy]);
-      const isStart = cx===0 && cy===0, isEnd = cx===m.orbCell[0] && cy===m.orbCell[1];
-      if(m.open[cy][cx].length === 1 && !isStart && !isEnd){
-        const p = cellPos(cx,cy); pearls.push({ x:p.x, y:p.y, got:false });
-      }
-    }
-    const minDist = Math.min(6, Math.floor(m.dist[m.orbCell[1]][m.orbCell[0]] * 0.6));
-    let far = cells.filter(([x,y])=> m.dist[y][x] >= minDist);
-    if(!far.length) far = cells;
-    const guards = [], df = dif();
-    const guardCount = Math.max(2, Math.round(d.guards*df.guards));
-    for(let i=0;i<guardCount;i++){
-      const [cx,cy] = far[randi(0, far.length-1)];
-      const p = cellPos(cx,cy);
-      guards.push({ kind:d.enemies[randi(0, d.enemies.length-1)], hp:2 + Math.floor(d.id/4), dir:0,
-                    cx, cy, x:p.x, y:p.y, tx:p.x, ty:p.y, ncx:cx, ncy:cy,
-                    speed: (0.85 + d.id*0.075 + rand(0,0.25))*df.speed, r:22, ph:rand(0,6), vx:0, vy:0,
-                    shooter: d.id >= 5 && Math.random() < Math.min(0.75, 0.06*(d.id - 3))*df.shooter,   // deeper guardians spit shots
-                    cd: rand(60, 160) });
-    }
-    const A = m.arena, ac = { x:(A.x0 + A.w/2)*T, y:(A.y0 + A.h/2)*T };
-    const startPos = cellPos(0,0);
-    const hazards=[];
-    if(d.skyTheme){
-      const candidates=[];
-      for(let cy=1;cy<d.mh;cy++) for(let cx=1;cx<d.mw;cx++){
-        const cell=cellPos(cx,cy);
-        if(Math.hypot(cell.x-startPos.x,cell.y-startPos.y)<T*3) continue;
-        if(m.open[cy][cx].length>0 && !(cx===m.orbCell[0]&&cy===m.orbCell[1])) candidates.push(cell);
-      }
-      // Select reproducible-looking but shuffled hazard positions from deep maze cells.
-      const count=Math.min(5+Math.floor(d.id/4),candidates.length);
-      for(let i=0;i<count;i++){
-        const j=randi(0,candidates.length-1), pos=candidates.splice(j,1)[0];
-        hazards.push({x:pos.x,y:pos.y,r:26+(d.id%3)*3,phase:(i*83+d.id*29)%240,tick:(i*83+d.id*29)%240,hitCd:0,kind:d.id%5});
-      }
-    }
-    const hp = Math.max(5, Math.round(d.bossHp*df.bossHp)), elite = d.id >= 10, tier = Math.max(0, d.id - 9);
-    const boss = Object.assign({ hp, max:hp, x:ac.x + 200, y:ac.y, vx:0, vy:0, ang:Math.PI, state:'idle',
-                                 t:0, hit:0, active:false, dead:false, atk:'charge', tx:ac.x, ty:ac.y,
-                                 elite, tier, armor: elite ? Math.min(0.25, 0.025*tier) : 0,
-                                 phase:1, shieldT:0, lastAtk:'', orb:rand(0, 6.28), orbDir:Math.random() < 0.5 ? 1 : -1,
-                                 lkx:player.x, lky:player.y }, d.boss);
-    const start = startPos;
-    const seen = Array.from({length:m.H}, ()=> new Array(m.W).fill(false));
-
-    M = { d, m, pearls, guards, hazards, treasure, start, checkpoint:null, orb:ac, ac, orbOn:false, seen, armed:false, done:false, frame:0,
-          boss, shots:[], bubs:[], php:maxHp(), fireCd:0, sealed:false, fx:[], vortex:null, ink:null, sonarT:0 };
-    const cell = Math.max(4, Math.floor(Math.min(230/m.W, 170/m.H)));
-    mapEl.width = m.W*cell; mapEl.height = m.H*cell; M.cell = cell;
-
-    caveHud._key = null;
-    active = true;
-    player.flipping = false; player.inAir = false;
-    player.x = start.x; player.y = start.y; player.vx = player.vy = 0;
-    invuln = 60;
-    hideWhenInside(true);
-    hideHoverLabel();
-    waterBgEl.style.display = 'none';
-    dungeonC.visible = true; darkS.visible = true; mapEl.style.display = 'block';
-    showBanner('Entering', d.name, d.skyTheme ? (d.skyTheme.name + ' · Beware ' + d.skyTheme.hazardName + '; defeat the boss to unlock the hidden Sky Vault.') : (d.biome.name + ' · ' + (d.legend ? 'A Mythical Sea Legend waits at the far end.' : 'Space shoots bubbles. Beat the boss, then take the relic.')));
-    playBlip();
-  }
-
-  // The Loch Ness Monster is an overworld-triggered boss that reuses the full dungeon combat system.
-  // It is deliberately not added to the numbered campaign, so the 35-dungeon route stays intact.
-  function startLochNessEncounter(ret){
-    if(active || !isStarted()) return false;
-    const source = DUNGEONS[34];
-    const d = Object.assign({}, source, {
-      id:36, name:'Loch Ness Monster — Overworld Guardian', x:source.x + 1700,
-      mw:14, mh:10, guards:12, bossHp:520, finalBoss:false,
-      ability:'tsunami', enemies:['leviathan','serpent','shark'],
-      boss:{ kind:'leviathan', name:'The Loch Ness Monster', r:150, legend:true, elite:true, pal:[0x2a8f9e,0x9be8ff] },
-      legend:true, biome:BIO.biomeForCave(20), returnPos: ret || null
-    });
-    delete d.floatY; delete d.skyTheme;
-    enterDungeon(d);
-    showBanner('OVERWORLD BOSS AWAKENED', 'The Loch Ness Monster', 'Your dungeon abilities and boss combat are active! Hold Space to fire bubbles and use your unlocked abilities.');
-    return true;
-  }
-
-  function exitDungeon(){
-    if(!active) return;
-    const d = M.d;
-    active = false;
-    if(window.MoceanFinalMusicStop) window.MoceanFinalMusicStop();
-    dungeonC.visible = false; darkS.visible = false; mapEl.style.display = 'none'; caveHud.style.display = 'none';
-    if(caveHover){ hideHoverLabel(caveHover); caveHover = null; }
-    hideWhenInside(false);
-    waterBgEl.style.display = '';
-    const p = d.returnPos || exitPos(d, 230);   // overworld boss: back beside the monster, not at cave 35's coordinates
-    player.x = p.x; player.y = p.y;
-    player.vx = player.vy = 0;
-    enterCd = 180;
-    M = null;
-  }
-
-  /* --------------------------------------------------------- dungeon tick */
-
-  const isWall = (tx,ty)=> !M || ty<0 || tx<0 || ty>=M.m.H || tx>=M.m.W || M.m.g[ty][tx] === 1;
-
-  function collide(r){
-    const tx0 = Math.floor((player.x - r)/T), tx1 = Math.floor((player.x + r)/T);
-    const ty0 = Math.floor((player.y - r)/T), ty1 = Math.floor((player.y + r)/T);
-    for(let ty=ty0; ty<=ty1; ty++) for(let tx=tx0; tx<=tx1; tx++){
-      if(!isWall(tx,ty)) continue;
-      const nx = clamp(player.x, tx*T, tx*T+T), ny = clamp(player.y, ty*T, ty*T+T);
-      const dx = player.x - nx, dy = player.y - ny, d2 = dx*dx + dy*dy;
-      if(d2 >= r*r || d2 < 1e-6) continue;
-      const d = Math.sqrt(d2), push = (r - d)/d;
-      player.x += dx*push; player.y += dy*push;
-      const ux = dx/d, uy = dy/d, vn = player.vx*ux + player.vy*uy;
-      if(vn < 0){ player.vx -= vn*ux*1.2; player.vy -= vn*uy*1.2; }
-    }
-  }
-
-  function updatePlayer(dt){
-    if(player.jumpCd > 0) player.jumpCd -= dt;
-    player.chomp *= Math.pow(0.85, dt);
-    const sm = speedMul(), acc = player.accel * sm;
-    let ax = 0, ay = 0;
-    if(keys.left) ax -= acc;  if(keys.right) ax += acc;
-    if(keys.up) ay -= acc;    if(keys.down) ay += acc;
-    if(ax !== 0 && ay !== 0){ ax *= 0.78; ay *= 0.78; }
-    player.vx += ax*dt; player.vy += ay*dt;
-    const dr = Math.pow(player.drag, dt);
-    player.vx *= dr; player.vy *= dr;
-    const maxS = player.maxSpeed * sm, raw = Math.hypot(player.vx, player.vy);
-    if(raw > maxS){ const k = maxS/raw; player.vx *= k; player.vy *= k; }
-
-    const r = player.size * look().size * 0.75;
-    const steps = Math.max(1, Math.ceil(raw*dt/18));
-    for(let i=0;i<steps;i++){
-      player.x += player.vx*dt/steps; player.y += player.vy*dt/steps;
-      if(TM.ghost <= 0) collide(r);
-      else { player.x = clamp(player.x, r, M.m.W*T - r); player.y = clamp(player.y, r, M.m.H*T - r); }   // Ghost Current: walls ignored
-    }
-
-    const speed = Math.hypot(player.vx, player.vy);
-    if(speed > 0.08) player.angle = Math.atan2(player.vy, player.vx);
-    player.displayAngle = lerpAngle(player.displayAngle, player.angle, 0.12*dt);
-    const diff = ((player.angle - player.displayAngle + Math.PI) % (Math.PI*2)) - Math.PI;
-    player.bank = clamp(diff*1.8, -1, 1);
-    player.tailPhase += 0.155*dt*(0.5 + Math.min(speed/player.maxSpeed,1)*1.85)*2.2;
-    player.bob = Math.sin(performance.now()*0.0025)*1.6;
-    player.inAir = false;
-    return speed;
-  }
-
-  // when Ghost Current ends inside solid rock, slide to the nearest open tile
-  function unstick(){
-    if(!isWall(Math.floor(player.x/T), Math.floor(player.y/T))) return;
-    const tx = Math.floor(player.x/T), ty = Math.floor(player.y/T);
-    let best = null, bd = Infinity;
-    for(let dy=-8; dy<=8; dy++) for(let dx=-8; dx<=8; dx++){
-      if(isWall(tx+dx, ty+dy)) continue;
-      const d = dx*dx + dy*dy;
-      if(d < bd){ bd = d; best = [tx+dx, ty+dy]; }
-    }
-    if(best){ player.x = (best[0] + 0.5)*T; player.y = (best[1] + 0.5)*T; player.vx = player.vy = 0; burstBubbles(player.x, player.y, 10); }
-  }
-
-  function defeat(){
-    M.fx.length = 0; M.vortex = null; M.ink = null; TM.ghost = 0;
-    M.php = maxHp(); M.shots.length = 0; M.bubs.length = 0; M.armed = false;
-    const cp = M.checkpoint || M.start;
-    player.x = cp.x; player.y = cp.y; player.vx = player.vy = 0;
-    invuln = 120;
-    const b = M.boss;
-    if(!b.dead){
-      b.hp = b.max; b.active = false; b.state = 'idle'; b.x = M.ac.x + 200; b.y = M.ac.y;
-      b.phase = 1; b.shieldT = 0; b.lastAtk = '';
-      if(M.sealed){ M.sealed = false; setDoor(false); }
-    }
-    popText(M.checkpoint ? 'Checkpoint restored!' : 'Swept back to the start!', 'warn');
-  }
-
-  function damagePlayer(fx, fy, n){
-    n = n || 1;
-    M.php -= n; invuln = dif().inv;
-    const a = Math.atan2(player.y - fy, player.x - fx);
-    player.vx += Math.cos(a)*9; player.vy += Math.sin(a)*9;
-    burstBubbles(player.x, player.y, 10); playBlip();
-    if(M.php <= 0) defeat(); else popText(`-${n} ♥`, 'warn');
-  }
-
-  function fire(){
-    if(!active || !M || M.fireCd > 0) return;
-    M.fireCd = 11 / (TM.rapid > 0 ? 2.6 : 1) / rateMul();         // Rapid Bubbles x the Bubble Rate upgrade
-    const a = player.displayAngle, pierce = TM.pierce > 0;       // Piercing Bubbles
-    const spread = TM.octa > 0 ? [0, 1, 2, 3, 4, 5, 6, 7].map(i => i*Math.PI/4)    // Octa Shot: a full ring
-                 : TM.quad > 0 ? [-0.36, -0.12, 0.12, 0.36]                       // Quad Shot
-                 : TM.triple > 0 ? [-0.3, 0, 0.3] : [0];                          // Triple Shot
-    const shark = save.form === 'shark';                         // Shark form: bigger bubbles that hit twice as hard
-    for(const o of spread){
-      const aa = a + o, reach = shark ? 30 : 20;
-      const b = { x:player.x + Math.cos(aa)*reach, y:player.y + Math.sin(aa)*reach,
-                  vx:Math.cos(aa)*(shark ? 14 : 13) + player.vx*0.3, vy:Math.sin(aa)*(shark ? 14 : 13) + player.vy*0.3, life:shark ? 90 : 80,
-                  dmg:(pierce ? 2 : 1)*(shark ? 2 : 1), pierce, hits:[] };
-      if(shark){ b.r = 13; b.big = true; }
-      M.bubs.push(b);
-    }
-  }
-
-  function stepGuard(e, dt, blind){
-    const dx = e.tx - e.x, dy = e.ty - e.y, d = Math.hypot(dx, dy);
-    if(d >= 16){
-      const ease = 1 - Math.pow(0.9, dt);                 // steer, don't snap: corners become gentle curves
-      e.vx += (dx/d*e.speed - e.vx)*ease; e.vy += (dy/d*e.speed - e.vy)*ease;
-      e.x += e.vx*dt; e.y += e.vy*dt;
-      return;
-    }
-    const from = [e.cx, e.cy];
-    e.cx = e.ncx; e.cy = e.ncy;
-    let opts = M.m.open[e.cy][e.cx];
-    const fwd = opts.filter(([x,y])=> !(x === from[0] && y === from[1]));
-    if(fwd.length) opts = fwd;
-    let pick;
-    if(!blind && Math.hypot(player.x - e.x, player.y - e.y) < 330 && Math.random() < 0.8){
-      pick = opts.reduce((best, c)=>{
-        const p = cellPos(c[0], c[1]);
-        const dd = Math.hypot(p.x - player.x, p.y - player.y);
-        return (!best || dd < best.dd) ? { c, dd } : best;
-      }, null).c;
-    } else pick = opts[randi(0, opts.length-1)];
-    const p = cellPos(pick[0], pick[1]);
-    e.ncx = pick[0]; e.ncy = pick[1]; e.tx = p.x; e.ty = p.y;
-  }
-
-  function completeDungeon(){
-    if(M.done) return;
-    M.done = true;
-    const d = M.d, first = !save.cleared.includes(d.id);
-    burstBubbles(player.x, player.y, 24);
-    playBlip();
-    if(first){
-      save.cleared.push(d.id); persist();
-      const ab = ABILITIES[d.ability];
-      showBanner('Ability unlocked', ab.name, `${ab.desc}  ·  press ${ab.key}`);
-      gain(120*d.id, 'Cave cleared!');
-    } else {
-      showBanner('Cave cleared', d.name, 'The relic hums softly.');
-      gain(25*d.id, 'Relic');
-    }
-    setTimeout(()=>{ if(active && M && M.d === d) exitDungeon(); }, 3200);
-  }
-
-  const BOSS_ATK = {
-    crab:['charge','ring'], eel:['charge','fan'], angler:['fan','charge'], shark:['charge','fan','fan','ring'],
-    puffer:['ring','charge','ring'], jelly:['ring','fan','spiral'], ray:['charge','fan','charge'],
-    kraken:['fan','ring','spiral'],
-    siren:['spiral','fan','ring'], ghostship:['charge','fan','spiral','ring'], dragon:['fan','charge','spiral','ring'],
-    turtle:['ring','charge','spiral'], serpent:['charge','fan','spiral','charge'],
-    hydra:['fan','fan','spiral','ring'], charybdis:['spiral','ring','spiral','fan'],
-    leviathan:['charge','spiral','fan','ring','spiral','sweep','barrage','homing'],
-    sky_crown:['ring','blink','homing','spiral','barrage'], sky_archivist:['aimed','spiral','homing','ring'],
-    sky_seraph:['fan','sweep','ring','blink'], sky_solar:['charge','barrage','ring','sweep'],
-    sky_frost:['ring','aimed','sweep','homing'], sky_wraith:['blink','spiral','homing','fan'],
-    sky_titan:['charge','sweep','barrage','ring'], sky_moon:['ring','blink','aimed','spiral'],
-    sky_reaper:['homing','barrage','blink','ring'], sky_maelstrom:['spiral','sweep','ring','homing'],
-    sky_tempest:['barrage','charge','sweep','aimed'], sky_prism:['ring','fan','blink','homing'],
-    sky_null:['homing','spiral','barrage','blink'], sky_horizon:['sweep','charge','ring','homing'],
-    sky_lotan:['charge','spiral','fan','ring','sweep','barrage','homing','blink']
-  };
-  // Elite bosses (caves 10+) learn extra tricks as the caves get deeper: [attack, first tier that has it]
-  const ELITE_EXTRA = [['aimed', 1], ['homing', 2], ['sweep', 4], ['blink', 6], ['barrage', 8]];
-  function atkList(b){
-    const base = BOSS_ATK[b.kind];
-    if(!b.elite) return base;
-    const extra = ELITE_EXTRA.filter(([, t]) => b.tier >= t).map(([a]) => a);
-    return base.concat(extra, extra);                   // they lean on the new tricks
-  }
-
-  function shoot(x, y, a, sp, extra){ sp *= dif().shot; M.shots.push(Object.assign({ x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, life:240 }, extra)); }
-
-  // where to aim so a shot of speed sp meets the player: elites lead their target instead of firing at where you were
-  function leadAngle(b, sp, k){
-    const dx = player.x - b.x, dy = player.y - b.y, t = Math.hypot(dx, dy)/sp*(k === undefined ? 0.85 : k);
-    return Math.atan2(dy + player.vy*t, dx + player.vx*t);
-  }
-
-  function updateBoss(dt){
-    const b = M.boss, A = M.m.arena;
-    if(b.dead) return;
-    if(b.hit > 0) b.hit -= dt;
-    if(b.shieldT > 0) b.shieldT -= dt;
-    if(!b.active){
-      if(player.x > (A.x0 + 1)*T){
-        b.active = true; M.sealed = true; setDoor(true); b.state = 'rest'; b.t = 70;
-        if(M.d.id === 35 && window.MoceanFinalMusicStart) window.MoceanFinalMusicStart();
-        M.checkpoint = { x:(A.x0 + 1.5)*T, y:(A.y0 + A.h/2)*T };
-        popText('BOSS CHECKPOINT SET', 'good');
-        showBanner(M.d.finalBoss ? 'TRUE FINAL BOSS' : (b.legend ? 'Mythical Sea Legend' : (b.elite ? 'Elite Boss' : 'Boss')), b.name, M.d.finalBoss ? 'Survive the Lotan surge: charges, spirals, aimed barrages and relentless rings!' : (b.elite ? 'It leads its shots, blinks and raises shields. Pop its orbs!' : 'Shoot it with Space!'));
-      }
-      return;
-    }
-    const frac = b.hp/b.max, tier = b.tier, camo = TM.camo > 0;
-    let rage;
-    if(b.elite) rage = 1 + (1 - frac)*(0.35 + 0.025*tier) + (b.legend ? 0.08 : 0);
-    if(M.d.finalBoss) rage *= 1.65 + (1-frac)*0.8;       // elites ramp up as they bleed
-    else rage = b.legend ? 1 + (1 - frac)*0.5 : (frac < 0.5 ? 1.15 : 1);                  // legends get angrier as they bleed
-    const rt = (b.elite ? 0.72 : 1)*dif().rest;                                                         // elites rest less between attacks
-    const x0 = A.x0*T + b.r, x1 = (A.x0 + A.w)*T - b.r, y0 = A.y0*T + b.r, y1 = (A.y0 + A.h)*T - b.r;
-    if(!camo){ b.lkx = player.x; b.lky = player.y; }                                       // Camouflage: it can't find you
-    const toP = camo ? b.ang : Math.atan2(player.y - b.y, player.x - b.x);
-    const aimAt = (sp, k)=> camo ? b.ang : leadAngle(b, sp, k);
-
-    // elite defence: every third of its health it raises a shield and releases homing orbs. Pop the orbs, wait it out.
-    if(b.elite){
-      const ph = frac < 0.34 ? 3 : frac < 0.67 ? 2 : 1;
-      if(ph > b.phase){
-        b.phase = ph; b.shieldT = 150 + tier*6; b.state = 'rest'; b.t = 100;
-        M.fx.push({ type:'ring', x:b.x, y:b.y, r1:b.r*3.2, col:0x9be8ff, life:36, max:36 });
-        const n = 4 + ph*2 + (b.legend ? 2 : 0);
-        for(let i=0;i<n;i++) shoot(b.x, b.y, i/n*Math.PI*2 + b.ang, 2.1, { home:true, life:420 });
-        popText(ph === 3 ? 'ENRAGED! Shield up!' : 'Shield up! Pop the orbs!', 'warn');
-      }
-    }
-
-    b.t -= dt;
-    if(b.state === 'rest'){
-      if(b.elite){
-        // circle the player at a distance, changing direction now and then, instead of drifting at random
-        b.orb += 0.011*dt*rage*b.orbDir;
-        if(Math.random() < 0.002*dt) b.orbDir = -b.orbDir;
-        const dd = 250 + 50*Math.sin(b.orb*2.3);
-        b.tx = clamp(b.lkx + Math.cos(b.orb)*dd, x0, x1); b.ty = clamp(b.lky + Math.sin(b.orb)*dd, y0, y1);
-      } else if(Math.hypot(b.tx - b.x, b.ty - b.y) < 24){ b.tx = rand(x0, x1); b.ty = rand(y0, y1); }
-      const a = Math.atan2(b.ty - b.y, b.tx - b.x), ease = 1 - Math.pow(0.96, dt), sp = (b.elite ? 2.1 : 1.5)*rage;
-      b.vx += (Math.cos(a)*sp - b.vx)*ease; b.vy += (Math.sin(a)*sp - b.vy)*ease;
-      b.x += b.vx*dt; b.y += b.vy*dt;
-      if(b.elite){ b.x = clamp(b.x, x0, x1); b.y = clamp(b.y, y0, y1); }
-      b.ang = lerpAngle(b.ang, toP, 0.05*dt);
-      if(b.t <= 0){
-        const l = atkList(b);
-        let pick = l[randi(0, l.length-1)];
-        if(b.elite) for(let k=0;k<5 && pick === b.lastAtk;k++) pick = l[randi(0, l.length-1)];   // never the same trick twice
-        b.lastAtk = b.atk = pick; b.state = 'wind';
-        const base = b.atk === 'charge' ? 62 : 45;
-        b.t = b.elite ? Math.max(26, base - tier*2.5) : base;
-      }
-    } else if(b.state === 'wind'){
-      b.ang = lerpAngle(b.ang, toP, 0.2*dt);
-      b.vx *= Math.pow(0.9, dt); b.vy *= Math.pow(0.9, dt); b.x += b.vx*dt; b.y += b.vy*dt;
-      if(b.t <= 0){
-        if(b.atk === 'charge'){
-          const sp = (b.elite ? 7.5 : 6.5)*rage, a = b.elite ? aimAt(sp, 0.55) : toP;
-          b.state = 'charge'; b.t = 34;
-          b.vx = Math.cos(a)*sp; b.vy = Math.sin(a)*sp; b.ang = a;
-        } else if(b.atk === 'spiral'){
-          b.state = 'spiral'; b.t = b.elite ? 130 : 110; b.cd = 0; b.spA = b.ang;
-        } else if(b.atk === 'sweep'){
-          b.state = 'sweep'; b.t = 100; b.cd = 0; b.swDir = Math.random() < 0.5 ? 1 : -1; b.spA = toP - b.swDir*0.95;
-        } else if(b.atk === 'barrage'){
-          b.state = 'barrage'; b.t = 96; b.cd = 0;
-        } else if(b.atk === 'blink'){
-          let spot = null;                                      // vanish and reappear a fair distance from the player
-          for(let k=0;k<12 && !spot;k++){
-            const a = rand(0, Math.PI*2), d = rand(240, 380);
-            const nx = clamp(player.x + Math.cos(a)*d, x0, x1), ny = clamp(player.y + Math.sin(a)*d, y0, y1);
-            if(Math.hypot(nx - player.x, ny - player.y) > 210) spot = { x:nx, y:ny };
-          }
-          burstBubbles(b.x, b.y, 10);
-          if(spot){ b.x = spot.x; b.y = spot.y; b.vx = b.vy = 0; }
-          burstBubbles(b.x, b.y, 10);
-          M.fx.push({ type:'ring', x:b.x, y:b.y, r1:130, col:0xd59bff, life:22, max:22 });
-          const a = aimAt(4.4*rage), n = tier >= 8 ? 7 : 5;
-          for(let i=0;i<n;i++) shoot(b.x, b.y, a + (i - (n-1)/2)*0.2, 4.4*rage);
-          b.state = 'rest'; b.t = 70/rage;
-        } else {
-          if(b.atk === 'ring'){
-            const n = M.d.finalBoss ? 28 : (b.elite ? Math.min(20, 10 + tier) : (b.legend ? 12 : 8));
-            for(let i=0;i<n;i++) shoot(b.x, b.y, i/n*Math.PI*2 + b.ang, 2.4*rage);
-            if(b.elite && tier >= 6) for(let i=0;i<n;i++) shoot(b.x, b.y, (i + 0.5)/n*Math.PI*2 + b.ang, 1.6*rage);   // a slower second ring in the gaps
-          } else if(b.atk === 'aimed'){
-            const sp = 4.4*rage, a = aimAt(sp), n = 3 + (tier >= 5 ? 2 : 0);
-            for(let i=0;i<n;i++) shoot(b.x, b.y, a + (i - (n-1)/2)*0.12, sp);
-          } else if(b.atk === 'homing'){
-            const n = 2 + Math.floor(tier/4);
-            for(let i=0;i<n;i++) shoot(b.x, b.y, toP + (i - (n-1)/2)*0.7, 2.0, { home:true, life:420 });
-          } else {
-            const n = b.elite ? 5 + (tier >= 6 ? 2 : 0) + (tier >= 10 ? 2 : 0) : (rage > 1 ? 5 : 3);
-            const a = b.elite ? aimAt(3.4*rage, 0.6) : toP;
-            for(let i=0;i<n;i++) shoot(b.x, b.y, a + (i - (n-1)/2)*(b.elite ? 0.26 : 0.3), 3.4*rage);
-          }
-          b.state = 'rest'; b.t = rand(M.d.finalBoss ? 38 : 110, M.d.finalBoss ? 68 : 170)/rage*rt;
-        }
-      }
-    } else if(b.state === 'charge'){
-      b.x += b.vx*dt; b.y += b.vy*dt;
-      const cx = clamp(b.x, x0, x1), cy = clamp(b.y, y0, y1);
-      if(cx !== b.x || cy !== b.y){
-        b.x = cx; b.y = cy; b.t = 0; burstBubbles(b.x, b.y, 6);
-        if(b.elite){                                            // slamming into the wall throws out a ring of shots
-          const n = 8 + Math.floor(tier/2);
-          for(let i=0;i<n;i++) shoot(b.x, b.y, i/n*Math.PI*2 + b.ang, 2.7*rage);
-        }
-      }
-      if(b.t <= 0){ b.state = 'rest'; b.t = 100/rage*rt; }
-    } else if(b.state === 'spiral'){
-      b.vx *= Math.pow(0.9, dt); b.vy *= Math.pow(0.9, dt); b.x += b.vx*dt; b.y += b.vy*dt;
-      b.spA += 0.16*dt*rage; b.ang = b.spA; b.cd -= dt;
-      const arms = b.elite && tier >= 5 ? 4 : 3;
-      if(b.cd <= 0){ b.cd = 6/rage; for(let k=0;k<arms;k++) shoot(b.x, b.y, b.spA + k*Math.PI*2/arms, 2.6*rage); }
-      if(b.t <= 0){ b.state = 'rest'; b.t = 100/rage*rt; }
-    } else if(b.state === 'sweep'){                              // a rotating stream: stand in the gap, or strafe against it
-      b.vx *= Math.pow(0.9, dt); b.vy *= Math.pow(0.9, dt); b.x += b.vx*dt; b.y += b.vy*dt;
-      b.spA += b.swDir*0.019*dt*rage; b.ang = b.spA; b.cd -= dt;
-      if(b.cd <= 0){ b.cd = 3.5/rage; shoot(b.x, b.y, b.spA, 3.3*rage); if(tier >= 7) shoot(b.x, b.y, b.spA + Math.PI, 3.3*rage); }
-      if(b.t <= 0){ b.state = 'rest'; b.t = 90/rage*rt; }
-    } else if(b.state === 'barrage'){                            // three quick, well-aimed volleys
-      b.vx *= Math.pow(0.9, dt); b.vy *= Math.pow(0.9, dt); b.x += b.vx*dt; b.y += b.vy*dt;
-      b.ang = lerpAngle(b.ang, toP, 0.25*dt); b.cd -= dt;
-      if(b.cd <= 0){
-        b.cd = 26/rage;
-        const sp = 4.8*rage, a = aimAt(sp);
-        for(let i=-1;i<=1;i++) shoot(b.x, b.y, a + i*0.1, sp);
-      }
-      if(b.t <= 0){ b.state = 'rest'; b.t = 90/rage*rt; }
-    }
-  }
-
-  function killBoss(){
-    const b = M.boss, d = M.d;
-    b.dead = true; M.orbOn = true; M.shots.length = 0;
-    if(M.d.id === 36) window.MoceanLochNessDefeated = true;
-    if(M.sealed){ M.sealed = false; setDoor(false); }
-    for(let i=0;i<4;i++) burstBubbles(b.x + rand(-40,40), b.y + rand(-40,40), 12);
-    gain((d.legend ? 100 : 60)*d.id, d.legend ? 'Sea Legend slain!' : 'Boss defeated!');
-    showBanner(d.legend ? 'Sea Legend defeated' : 'Boss defeated', b.name, d.skyTheme ? 'The hidden Sky Vault is awake! Search the arena for its treasure before taking the relic.' : 'Take the glowing relic!');
-  }
-
-  function updateDungeon(dt, now){
-    M.frame++;
-    if(M.php > maxHp()){ M.php = maxHp(); caveHud._key = null; }
-    const pr = player.size * look().size * 0.75;
-    const ptx = Math.floor(player.x/T), pty = Math.floor(player.y/T);
-    for(let dy=-3; dy<=3; dy++) for(let dx=-3; dx<=3; dx++){
-      const x = ptx+dx, y = pty+dy;
-      if(dx*dx + dy*dy <= 10 && y>=0 && x>=0 && y<M.m.H && x<M.m.W) M.seen[y][x] = true;
-    }
-    const safe = ()=> shieldT > 0 || invuln > 0 || M.done;
-
-    const eDt = dt * (TM.ripple > 0 ? 0.4 : 1);                 // Time Ripple slows everything hostile
-    const b = M.boss;
-
-    // bubbles: hold Space to keep firing
-    if(M.fireCd > 0) M.fireCd -= dt;
-    if(keys.space) fire();
-    for(let i=M.bubs.length-1;i>=0;i--){
-      const p = M.bubs[i]; if(!p) continue;
-      p.x += p.vx*dt; p.y += p.vy*dt; p.life -= dt;
-      const rad = p.r || 7;
-      let dead = p.life <= 0 || isWall(Math.floor(p.x/T), Math.floor(p.y/T));
-      if(!dead && b.active && !b.dead && Math.hypot(p.x - b.x, p.y - b.y) < b.r + rad + 5){
-        if(!p.pierce){ dead = true; damageBoss(p.dmg || 1); }
-        else if(!p.hitBoss){ p.hitBoss = true; damageBoss(p.dmg || 1); }
-      }
-      if(!dead && b.shieldT > 0 && b.active && !b.dead && Math.hypot(p.x - b.x, p.y - b.y) < b.r + rad + 26) dead = true;   // the shield pops stray bubbles
-      if(!dead) for(let k=M.shots.length-1;k>=0;k--){              // bubbles pop homing orbs
-        const sh = M.shots[k];
-        if(sh.home && Math.hypot(p.x - sh.x, p.y - sh.y) < rad + 13){
-          M.shots.splice(k, 1); burstBubbles(sh.x, sh.y, 3);
-          if(!p.pierce) dead = true;
-          break;
-        }
-      }
-      if(!dead) for(let k=M.guards.length-1;k>=0;k--){
-        const e = M.guards[k];
-        if(Math.hypot(p.x - e.x, p.y - e.y) < e.r + rad + 1){
-          if(p.pierce){ if(p.hits.includes(e)) continue; p.hits.push(e); hurtGuard(k, p.dmg || 1); }
-          else { dead = true; hurtGuard(k, p.dmg || 1); break; }
-        }
-      }
-      if(dead) M.bubs.splice(i,1);
-    }
-
-    // sea-creature guardians (Ink Cloud blinds + slows them, Whirlpool drags them in)
-    const V = M.vortex, I = M.ink;
-    for(const e of M.guards){
-      let gdt = eDt, blind = TM.camo > 0;
-      if(I && Math.hypot(e.x - I.x, e.y - I.y) < I.r){ gdt *= 0.35; blind = true; }
-      if(V){
-        const vx = V.x - e.x, vy = V.y - e.y, vd = Math.hypot(vx, vy);
-        if(vd < 380 && vd > 8){ const pull = (1.1 + (380 - vd)/380*2.2)*dt; e.x += vx/vd*pull; e.y += vy/vd*pull; }
-      }
-      stepGuard(e, gdt, blind);
-      if(e.shooter){                                            // deeper guardians spit a shot when you are close
-        e.cd -= gdt;
-        if(e.cd <= 0 && !blind){
-          const dd = Math.hypot(player.x - e.x, player.y - e.y);
-          if(dd < 480){ e.cd = Math.max(70, rand(120, 190) - M.d.id*3); shoot(e.x, e.y, Math.atan2(player.y - e.y, player.x - e.x), 2.6 + M.d.id*0.04); }
-          else e.cd = 20;
-        }
-      }
-      if(!safe() && Math.hypot(player.x - e.x, player.y - e.y) < e.r + pr*0.8){ damagePlayer(e.x, e.y); break; }
-    }
-    if(V){
-      V.life -= dt; V.tick -= dt;
-      if(V.tick <= 0){
-        V.tick = 28;
-        for(let k=M.guards.length-1;k>=0;k--) if(Math.hypot(M.guards[k].x - V.x, M.guards[k].y - V.y) < 140) hurtGuard(k, 1);
-        if(b.active && !b.dead && Math.hypot(b.x - V.x, b.y - V.y) < b.r + 150) damageBoss(1);
-      }
-      if(V.life <= 0) M.vortex = null;
-    }
-    if(I){ I.life -= dt; if(I.life <= 0) M.ink = null; }
-
-    // Sky Sea environmental hazards cycle through a clear warning and active phase.
-    for(const h of M.hazards){
-      h.tick=(h.tick+eDt)%240;
-      if(h.hitCd>0) h.hitCd-=eDt;
-      const activeHazard=h.tick>95 && h.tick<155;
-      if(activeHazard && h.hitCd<=0 && !safe() && Math.hypot(player.x-h.x,player.y-h.y)<h.r+pr){
-        h.hitCd=70; damagePlayer(h.x,h.y,1);
-      }
-    }
-
-    // boss + its shots
-    updateBoss(eDt);
-    if(b.active && !b.dead && !safe() && Math.hypot(player.x - b.x, player.y - b.y) < b.r + pr*0.7)
-      damagePlayer(b.x, b.y, (b.elite && b.tier >= 6 && b.state === 'charge') ? 2 : 1);      // late elites hit hard when they ram you
-    for(let i=M.shots.length-1;i>=0;i--){
-      const p = M.shots[i]; if(!p) continue;
-      if(p.home && TM.camo <= 0){                                  // homing orbs curve toward you (slowly)
-        const sp = Math.hypot(p.vx, p.vy), na = lerpAngle(Math.atan2(p.vy, p.vx), Math.atan2(player.y - p.y, player.x - p.x), 0.035*eDt);
-        p.vx = Math.cos(na)*sp; p.vy = Math.sin(na)*sp;
-      }
-      p.x += p.vx*eDt; p.y += p.vy*eDt; p.life -= eDt;
-      let dead = p.life <= 0 || isWall(Math.floor(p.x/T), Math.floor(p.y/T));
-      if(!dead && M.ink && Math.hypot(p.x - M.ink.x, p.y - M.ink.y) < M.ink.r) dead = true;        // the ink eats shots
-      if(!dead && !safe() && Math.hypot(p.x - player.x, p.y - player.y) < 11 + pr*0.7){ dead = true; damagePlayer(p.x, p.y); }
-      if(dead) M.shots.splice(i,1);
-    }
-
-    const mag = TM.magnet > 0;                                    // Pearl Magnet
-    for(const p of M.pearls){
-      if(p.got) continue;
-      if(mag){
-        const dx = player.x - p.x, dy = player.y - p.y, dd = Math.hypot(dx, dy);
-        if(dd < 520 && dd > 1){ const st = Math.min(dd, 7)*dt; p.x += dx/dd*st; p.y += dy/dd*st; }
-      }
-      if(Math.hypot(player.x - p.x, player.y - p.y) < 42 + pr){
-        p.got = true; gain(5 + 3*M.d.id, 'Pearl'); burstBubbles(p.x, p.y, 6); playBlip();
-      }
-    }
-
-    for(let i=M.fx.length-1;i>=0;i--){ M.fx[i].life -= dt; if(M.fx[i].life <= 0) M.fx.splice(i,1); }
-    if(M.sonarT > 0) M.sonarT -= dt;
-
-    if(M.treasure && M.boss.dead && !M.treasure.got){
-      M.treasure.active=true;
-      if(Math.hypot(player.x-M.treasure.x,player.y-M.treasure.y)<42+pr){
-        M.treasure.got=true; M.php=Math.min(maxHp(),M.php+2); gain(180*M.d.id,'Secret Sky Vault!');
-        burstBubbles(M.treasure.x,M.treasure.y,22); playBlip(); popText('VAULT LOOTED · +2 HEARTS','good');
-      }
-    }
-    if(M.orbOn && !M.done && Math.hypot(player.x - M.orb.x, player.y - M.orb.y) < 46 + pr) completeDungeon();
-    const pd = Math.hypot(player.x - M.start.x, player.y - M.start.y);
-    if(pd > 180) M.armed = true;
-    if(M.armed && pd < 34 && !M.done && !M.sealed){ exitDungeon(); return; }
-
-    const target = save.glow && has('glow') ? 620 : 330;
-    lightR += (target - lightR) * 0.06 * dt;
-    darkS.x = app.screen.width/2 + view.ox; darkS.y = app.screen.height/2 + player.bob + view.oy;
-    darkS.width = darkS.height = lightR / 0.085;
-
-    drawEntities(now);
-    updateCaveHover();
-    if(M.frame % 6 === 0) drawMap();
-    updateCaveHud();
-  }
-
-  function updateCaveHud(){
-    const b = M.boss, showBoss = b.active && !b.dead;
-    const shielded = showBoss && b.shieldT > 0;
-    const key = M.php + '|' + maxHp() + '|' + (showBoss ? Math.ceil(b.hp) : -1) + '|' + shielded;
-    if(key === caveHud._key) return;
-    caveHud._key = key;
-    caveHud.style.display = 'block';
-    const cls = (b.legend ? ' legend' : '') + (b.elite ? ' elite' : '') + (M.d.finalBoss ? ' final-boss' : '') + (shielded ? ' shielded' : '');
-    const tag = b.elite ? `<span class="boss-tag">ELITE · ARMOR ${Math.round(b.armor*100)}%${shielded ? ' · SHIELDED' : ''}</span>` : '';
-    caveHud.innerHTML = '<div class="hearts">' + '♥'.repeat(Math.max(0, M.php)) + '<span>' + '♥'.repeat(Math.max(0, maxHp() - Math.max(0, M.php))) + '</span></div>' +
-      (showBoss ? `<div class="boss-name${cls}">${b.legend ? '✦ ' : ''}${b.name}${tag}</div><div class="boss-bar${cls}"><div style="width:${Math.max(0, b.hp/b.max*100)}%"></div></div>` : '');
-  }
-
-  /* ---------------- hover labels for guardians and bosses ---------------- */
-
-  const SPECIES = { crab:'Crab', urchin:'Sea Urchin', eel:'Moray Eel', puffer:'Pufferfish', jelly:'Jellyfish', angler:'Anglerfish',
-                    kraken:'Kraken', ray:'Manta Ray', siren:'Siren', ghostship:'Ghost Ship', dragon:'Sea Dragon', turtle:'Giant Sea Turtle',
-                    serpent:'Sea Serpent', leviathan:'Leviathan', hydra:'Hydra', charybdis:'Maw', shark:'Shark' };
-  let caveHover = null;
-
-  function updateCaveHover(){
-    let label = null;
-    if(mouseScreen && !menuOpen){
-      const r = app.view.getBoundingClientRect();
-      if(mouseScreen.x >= r.left && mouseScreen.x <= r.right && mouseScreen.y >= r.top && mouseScreen.y <= r.bottom){
-        const wx = (mouseScreen.x - r.left)*app.screen.width/r.width - world.x;
-        const wy = (mouseScreen.y - r.top)*app.screen.height/r.height - world.y;
-        const seen = (o)=> Math.hypot(o.x - player.x, o.y - player.y) < lightR*1.05;         // only what the light reveals
-        let bestD = Infinity;
-        for(const e of M.guards){
-          const d = Math.hypot(wx - e.x, wy - e.y) - (e.r + 12);
-          if(d < 0 && d < bestD && seen(e)){ bestD = d; label = (SPECIES[e.kind] || e.kind) + (e.shooter ? ' · spits shots' : ''); }
-        }
-        const b = M.boss;
-        if(b.active && !b.dead){
-          const d = Math.hypot(wx - b.x, wy - b.y) - (b.r + 12);
-          if(d < 0 && d < bestD && seen(b)) label = `${b.name} · ${SPECIES[b.kind] || b.kind} ${b.legend ? 'Legend' : 'Boss'}${b.elite ? ' (Elite)' : ''}`;
-        }
-      }
-    }
-    if(label !== caveHover){
-      if(caveHover) hideHoverLabel(caveHover);
-      if(label) showHoverLabel(label);
-      caveHover = label;
-    }
-  }
-
-  /* ---------------- sea-creature drawing (all vector, drawn each frame) ---------------- */
-
-  /* ---------- wireframe sea creatures: stroked outlines only, like the open-ocean fish ---------- */
-
-  const PAL = {
-    crab:[0xff8a5c,0xffd0a8], urchin:[0xb07aff,0xff9bd2], eel:[0x6fe0a0,0xd5ff9b], puffer:[0xffd45e,0xfff0bd],
-    jelly:[0xd59bff,0xffc8ff], angler:[0x8fa8d8,0x88ff44], kraken:[0xd07ad8,0xffc8ff],
-    ray:[0x6fa8ff,0xdff6ff], siren:[0x6fe0d0,0xffc8ff], ghostship:[0x8fe8d8,0xe0fff8], dragon:[0xff5a4a,0xffd36a],
-    turtle:[0x6fbf8a,0xe8e0a8], serpent:[0x6fd0a0,0xd5ff9b], leviathan:[0x7a7aff,0xffd36a], hydra:[0x5fd08a,0xff9bd2],
-    charybdis:[0x5a6aff,0xcfd8ff], shark:[0xa8c4d8,0xffffff]
-  };
-  const BOSS_SCALE = { crab:0.8, eel:1.05, angler:0.95, kraken:0.95, puffer:0.8, jelly:0.9, ray:0.7, siren:0.8, ghostship:0.6,
-                       dragon:0.72, turtle:0.8, serpent:0.85, leviathan:0.85, hydra:0.8, charybdis:0.9 };
-
-  // One definition per species, in unit coordinates (+u = forward). S scales it: ~20 for guardians, ~55 for bosses.
-  function drawCreature(g, kind, x, y, ang, S, t, flash, palOv){
-    const c = Math.cos(ang), sn = Math.sin(ang), pal = palOv || PAL[kind];
-    const body = flash ? 0xffffff : pal[0], acc = flash ? 0xffffff : pal[1];
-    const P = (u, v)=> [x + (u*c - v*sn)*S, y + (u*sn + v*c)*S];
-    const W = Math.max(1.7, S*0.085);
-    const line = (w, col, al)=> g.lineStyle({ width:w, color:col, alpha: al === undefined ? 1 : al, ...ROUND });
-    const path = (pts)=> pts.forEach((p, i)=> i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1]));
-    const loop = (pts)=> { path(pts); g.lineTo(pts[0][0], pts[0][1]); };
-    const oval = (u0, v0, rx, ry, n)=> { const pts = []; n = n || 22;
-      for(let i=0;i<n;i++){ const a = i/n*Math.PI*2; pts.push(P(u0 + Math.cos(a)*rx, v0 + Math.sin(a)*ry)); } loop(pts); };
-    const quad = (a, b)=> g.quadraticCurveTo(a[0], a[1], b[0], b[1]);
-    const dot = (u, v, r, col, al)=> { const p = P(u, v); g.lineStyle(0); g.beginFill(col, al === undefined ? 1 : al); g.drawCircle(p[0], p[1], r); g.endFill(); };
-    const eye = (u, v, r)=> { const p = P(u, v); line(Math.max(1.2, W*0.55), acc); g.drawCircle(p[0], p[1], r); dot(u + 0.03, v, Math.max(1.2, r*0.45), acc); };
-
-    const SKY_BOSS_KINDS = ['sky_crown','sky_archivist','sky_seraph','sky_solar','sky_frost','sky_wraith','sky_titan','sky_moon','sky_reaper','sky_maelstrom','sky_tempest','sky_prism','sky_null','sky_horizon','sky_lotan'];
-    if(SKY_BOSS_KINDS.includes(kind)){
-      const ix = SKY_BOSS_KINDS.indexOf(kind), pulse = 0.82 + 0.18*Math.sin(t*2.4), rot = t*(0.35 + ix*0.025);
-      line(W, body, 0.95); oval(0,0, ix===14 ? 1.15 : 0.86, ix===14 ? 0.88 : 0.7, 28);
-      line(W*0.7, acc, 0.9);
-      if(ix%3===0){
-        for(let k=0;k<8;k++){ const a=rot+k*Math.PI/4, r=1.0+(k%2)*0.55; path([P(Math.cos(a)*0.68,Math.sin(a)*0.55),P(Math.cos(a)*r,Math.sin(a)*r)]); dot(Math.cos(a)*r,Math.sin(a)*r,Math.max(1.8,S*0.045),acc,0.9); }
-        oval(0,0,1.25*pulse,1.25*pulse,32);
-      } else if(ix%3===1){
-        for(let k=0;k<5;k++){ const u=-0.85+k*0.42, bend=Math.sin(t*2+k)*0.18; path([P(u,-0.4),P(u+bend,-0.9),P(u+bend*1.5,-1.35),P(u+0.15,-1.65)]); path([P(u,0.4),P(u-bend,0.9),P(u-bend*1.5,1.35),P(u-0.15,1.65)]); }
-        for(let k=0;k<3;k++) dot(0.15+k*0.18,-0.12,Math.max(2,S*0.055),acc,0.95);
-      } else {
-        for(let k=0;k<4;k++){ const a=rot+k*Math.PI/2, r=1.15+0.12*Math.sin(t*3+k); path([P(Math.cos(a)*0.45,Math.sin(a)*0.45),P(Math.cos(a)*r,Math.sin(a)*r)]); }
-        const pts=[]; for(let k=0;k<10;k++){ const a=rot+k*Math.PI/5, r=k%2?0.72:1.18; pts.push(P(Math.cos(a)*r,Math.sin(a)*r)); } loop(pts);
-      }
-      line(W*0.8, acc, 0.95); eye(0.35,-0.12,Math.max(2.4,S*0.075)); eye(0.58,0.12,Math.max(1.8,S*0.05));
-      if(ix===14){ for(let k=0;k<6;k++){ const a=rot+k*Math.PI/3; path([P(-0.25,0),P(-0.7+Math.cos(a)*0.15,Math.sin(a)*1.25),P(-1.0,Math.sin(a)*1.45)]); } oval(0,0,1.55*pulse,1.28*pulse,36); }
-      g.lineStyle(0); return;
-    }
-    switch(kind){
-      case 'crab': {
-        line(W, body); oval(0, 0, 0.9, 0.6);
-        line(W*0.7, body);
-        for(let i=0;i<3;i++) for(const sd of [-1,1]){
-          const sw = Math.sin(t*3 + i*1.3 + (sd > 0 ? 0 : Math.PI))*0.16, u = -0.5 + i*0.4;
-          path([P(u, sd*0.55), P(u + sw - 0.1, sd*1.0), P(u + sw*1.6 - 0.2, sd*1.38)]);
-        }
-        for(const sd of [-1,1]){
-          const open = 0.22 + (Math.sin(t*2 + (sd > 0 ? 0 : 1.6)) + 1)*0.12;
-          line(W*0.9, body); path([P(0.7, sd*0.42), P(1.15, sd*0.78)]);
-          line(W, acc);
-          path([P(1.15, sd*0.78), P(1.6, sd*(0.78 - open)), P(1.9, sd*(0.62 - open*0.5))]);
-          path([P(1.15, sd*0.78), P(1.5, sd*(0.78 + open)), P(1.82, sd*(0.95 + open*0.4))]);
-          line(W*0.6, body); path([P(0.78, sd*0.2), P(0.92, sd*0.32)]); dot(0.95, sd*0.34, Math.max(1.5, S*0.07), acc);
-        }
-        break;
-      }
-      case 'urchin': {
-        const rot = t*0.15;
-        line(W, body); oval(0, 0, 0.5, 0.5, 16);
-        for(let i=0;i<14;i++){
-          const a = rot + i/14*Math.PI*2, l2 = (i%2 ? 0.85 : 1.2) + Math.sin(t*2 + i)*0.05;
-          line(W*0.6, i%2 ? acc : body);
-          path([P(Math.cos(a)*0.5, Math.sin(a)*0.5), P(Math.cos(a)*l2, Math.sin(a)*l2)]);
-        }
-        dot(0, 0, Math.max(2, S*0.11), acc, 0.9);
-        break;
-      }
-      case 'eel': {
-        const N = S > 30 ? 16 : 10, seg = S > 30 ? 0.26 : 0.3, top = [], bot = [], fin = [];
-        for(let i=0;i<=N;i++){
-          const f = i/N, u = 0.55 - i*seg, v = Math.sin(t*2 - i*0.55)*0.2*(0.3 + f), w = 0.28*(1 - f*0.85) + 0.02;
-          top.push(P(u, v - w)); bot.push(P(u, v + w)); fin.push(P(u - 0.06, v - w - 0.16));
-        }
-        line(W, body); path(top); path(bot);
-        g.moveTo(top[0][0], top[0][1]); quad(P(1.1, 0), bot[0]);
-        line(W*0.55, acc, 0.8);
-        for(let i=1;i<N;i+=2) path([top[i], fin[i]]);
-        line(W*0.6, acc); path([P(0.55, -0.1), P(0.95, -0.03)]); path([P(0.55, 0.1), P(0.95, 0.03)]);
-        eye(0.3, -0.12, Math.max(1.8, S*0.075));
-        break;
-      }
-      case 'puffer': {
-        line(W, body); oval(0, 0, 0.95, 0.8, 20);
-        for(let i=0;i<10;i++){
-          const a = i/10*Math.PI*2 + 0.15;
-          line(W*0.55, acc); path([P(Math.cos(a)*0.95, Math.sin(a)*0.8), P(Math.cos(a)*1.3, Math.sin(a)*1.1)]);
-        }
-        const wag = Math.sin(t*4)*0.2;
-        line(W, body); path([P(-0.95, 0), P(-1.5, -0.4 + wag), P(-1.28, wag*0.5), P(-1.5, 0.4 + wag), P(-0.95, 0)]);
-        line(W*0.7, acc); path([P(0.1, 0.5), P(-0.2, 0.95 + Math.sin(t*5)*0.1), P(-0.32, 0.45)]);
-        path([P(0.95, 0.12), P(0.78, 0.14)]);
-        eye(0.5, -0.25, Math.max(2, S*0.15));
-        break;
-      }
-      case 'jelly': {
-        const p = 1 + Math.sin(t*2.5)*0.15;
-        line(W, body, 0.95);
-        g.moveTo(...P(0, -p)); quad(P(1.0, -0.8*p), P(1.0, 0)); quad(P(1.0, 0.8*p), P(0, p)); quad(P(0.2, 0), P(0, -p));
-        line(W*0.5, acc, 0.5); g.moveTo(...P(0.1, -0.55*p)); quad(P(0.55, 0), P(0.1, 0.55*p));
-        for(let i=0;i<5;i++){
-          const v0 = -0.7 + i*0.35;
-          line(W*0.7, body, 0.65); g.moveTo(...P(0.05, v0));
-          for(let j=1;j<=4;j++) g.lineTo(...P(0.05 - j*0.5, v0 + Math.sin(t*3 + i + j)*0.12*j));
-        }
-        line(W*1.0, acc, 0.6);
-        for(const sd of [-1,1]){ g.moveTo(...P(0, sd*0.18)); for(let j=1;j<=3;j++) g.lineTo(...P(-j*0.5, sd*0.18 + Math.sin(t*2.4 + j + sd)*0.14*j)); }
-        break;
-      }
-      case 'angler': {
-        line(W, body);
-        g.moveTo(...P(1.0, 0.15)); quad(P(0.9, -0.9), P(-0.2, -0.85)); quad(P(-1, -0.6), P(-1, 0)); quad(P(-1, 0.6), P(-0.1, 0.8)); quad(P(0.65, 0.8), P(0.95, 0.4));
-        const wag = Math.sin(t*3)*0.18;
-        path([P(-1, 0), P(-1.6, -0.45 + wag), P(-1.38, wag*0.4), P(-1.6, 0.45 + wag), P(-1, 0)]);
-        line(W*0.7, acc); path([P(1.0, 0.15), P(0.3, 0.3)]);
-        for(let k=0;k<5;k++) path([P(0.95 - k*0.14, 0.16 + k*0.017), P(0.9 - k*0.14, 0.33 + k*0.017)]);
-        line(W*0.6, body); g.moveTo(...P(0.35, -0.75)); quad(P(0.7, -1.5 + Math.sin(t*2)*0.1), P(1.2, -1.1));
-        const lp = P(1.2, -1.1), halo = Math.max(3, S*0.2) + Math.sin(t*3)*S*0.03;
-        line(1.3, 0x88ff44, 0.5); g.drawCircle(lp[0], lp[1], halo);
-        dot(1.2, -1.1, Math.max(2.2, S*0.1), 0x88ff44, 0.95);
-        eye(0.5, -0.3, Math.max(2, S*0.16));
-        break;
-      }
-      case 'kraken': {
-        line(W, body); oval(0.05, 0, 1, 0.85, 26);
-        for(const sd of [-1,1]){ path([P(-0.6, sd*0.7), P(-1.1, sd*1.15), P(-0.95, sd*0.4)]); }
-        line(W*0.5, acc, 0.6); g.moveTo(...P(0.7, -0.55)); quad(P(-0.2, 0), P(0.7, 0.55));
-        for(let k=0;k<8;k++){
-          const v0 = (k - 3.5)*0.2;
-          line(W*(k%3 === 0 ? 0.95 : 0.65), k%2 ? body : acc, 0.9);
-          g.moveTo(...P(-0.9, v0));
-          for(let j=1;j<=8;j++) g.lineTo(...P(-0.9 - j*0.34, v0*(1 + j*0.2) + Math.sin(t*2 + j*0.7 + k)*0.16));
-        }
-        for(const sd of [-1,1]){ eye(0.5, sd*0.42, Math.max(2.5, S*0.2)); }
-        break;
-      }
-
-      case 'ray': {
-        const fl = Math.sin(t*2.4)*0.28;
-        line(W, body);
-        g.moveTo(...P(1.25, 0));
-        quad(P(0.5, -0.9 - fl*0.4), P(-0.3, -1.9 - fl));
-        quad(P(-0.7, -0.7), P(-1.0, 0));
-        quad(P(-0.7, 0.7), P(-0.3, 1.9 + fl));
-        quad(P(0.5, 0.9 + fl*0.4), P(1.25, 0));
-        line(W*0.6, acc, 0.7);
-        g.moveTo(...P(0.9, 0)); quad(P(0.1, -0.5 - fl*0.3), P(-0.5, -1.15 - fl*0.6));
-        g.moveTo(...P(0.9, 0)); quad(P(0.1, 0.5 + fl*0.3), P(-0.5, 1.15 + fl*0.6));
-        line(W*0.8, body);
-        path([P(-1.0, 0), P(-1.8, Math.sin(t*3)*0.2), P(-2.6, Math.sin(t*3 + 1)*0.35)]);
-        line(W*0.7, acc); path([P(1.2, -0.12), P(1.55, -0.3)]); path([P(1.2, 0.12), P(1.55, 0.3)]);
-        eye(0.75, -0.25, Math.max(1.8, S*0.07)); eye(0.75, 0.25, Math.max(1.8, S*0.07));
-        break;
-      }
-      case 'siren': {
-        const N = 9, top = [], bot = [];
-        for(let i=0;i<=N;i++){
-          const f = i/N, u = -0.35 - i*0.2, v = Math.sin(t*2.2 - i*0.55)*0.28*(0.25 + f), w = 0.3*(1 - f*0.9) + 0.03;
-          top.push(P(u, v - w)); bot.push(P(u, v + w));
-        }
-        line(W, body); path(top); path(bot);
-        const eu = -0.35 - N*0.2, ev = Math.sin(t*2.2 - N*0.55)*0.28*1.25;
-        line(W*0.9, acc); path([P(eu, ev), P(eu - 0.45, ev - 0.5), P(eu - 0.2, ev), P(eu - 0.45, ev + 0.5), P(eu, ev)]);
-        line(W*0.5, acc, 0.5); for(let i=1;i<N;i+=2) path([top[i], bot[i]]);
-        line(W, body); loop([P(0.6,-0.3), P(0.0,-0.42), P(-0.35,-0.2), P(-0.35,0.2), P(0.0,0.42), P(0.6,0.3)]);
-        oval(0.95, 0, 0.27, 0.27, 14);
-        const arm = Math.sin(t*2)*0.12;
-        line(W*0.8, body);
-        path([P(0.35,-0.36), P(0.75,-0.85 + arm), P(1.25,-0.75 + arm)]);
-        path([P(0.35, 0.36), P(0.75, 0.85 - arm), P(1.25, 0.75 - arm)]);
-        line(W*0.6, acc, 0.85);                                           // flowing hair
-        for(let k=0;k<5;k++){
-          const v0 = (-0.2 + k*0.1)*1.3;
-          g.moveTo(...P(0.9, v0));
-          for(let j=1;j<=4;j++) g.lineTo(...P(0.9 - j*0.35, v0 + (k - 2)*0.1*j + Math.sin(t*2.6 + j + k)*0.12*j));
-        }
-        const ph = (t*0.5) % 1, hp = P(0.95, 0);                          // her song, as ripples
-        g.lineStyle({ width:Math.max(1.2, W*0.5), color:acc, alpha:0.5*(1 - ph), ...ROUND });
-        g.drawCircle(hp[0], hp[1], S*(0.4 + ph*1.4));
-        eye(1.02, -0.09, Math.max(1.4, S*0.045));
-        break;
-      }
-      case 'ghostship': {
-        const dir = Math.cos(ang) >= 0 ? 1 : -1;                          // side view; only flips left/right
-        const bob = Math.sin(t*1.3)*S*0.06;
-        const Q = (u, v)=> [x + u*dir*S, y + v*S + bob];
-        const ql = (u, v)=> g.lineTo(...Q(u, v)), qm = (u, v)=> g.moveTo(...Q(u, v));
-        line(W, body, 0.85);
-        qm(1.7,-0.15); ql(1.2,0.5); ql(-1.3,0.5); ql(-1.7,-0.25); ql(-1.3,-0.1); ql(1.0,-0.1); ql(1.7,-0.15);
-        line(W*0.8, body, 0.85);
-        qm(0.55,-0.1); ql(0.55,-1.9); qm(-0.7,-0.1); ql(-0.7,-1.65);
-        const sw = Math.sin(t*2)*0.12, sw2 = Math.sin(t*2 + 1.3)*0.1;
-        line(W*0.7, acc, 0.75);
-        qm(0.55,-1.75); ql(1.25 + sw,-1.45); ql(1.15 + sw2,-0.95); ql(1.3 + sw,-0.45); ql(0.55,-0.3);     // tattered sails
-        qm(-0.7,-1.55); ql(-1.3 + sw2,-1.25); ql(-1.2 + sw,-0.8); ql(-1.35 + sw2,-0.35); ql(-0.7,-0.25);
-        qm(0.55,-1.9); ql(1.0 + sw,-1.8); ql(0.55,-1.7);                                                  // flag
-        line(W*0.5, acc, 0.35);                                                                           // ghostly wake
-        for(let k=0;k<3;k++){ qm(-1.7, -0.1 + k*0.2); for(let j=1;j<=4;j++) ql(-1.7 - j*0.35, -0.1 + k*0.2 + Math.sin(t*3 + j + k)*0.1*j); }
-        const lp = Q(-1.45,-0.45);
-        g.lineStyle(0); g.beginFill(acc, 0.85); g.drawCircle(lp[0], lp[1], Math.max(2.2, S*0.07)); g.endFill();
-        g.beginFill(acc, 0.14); g.drawCircle(lp[0], lp[1], S*0.28); g.endFill();
-        break;
-      }
-      case 'dragon': {
-        const N = 15, seg = 0.36, top = [], bot = [], pts = [];
-        for(let i=0;i<=N;i++){
-          const f = i/N, u = 0.35 - i*seg, v = Math.sin(t*2 - i*0.5)*0.34*(0.3 + f), w = 0.3*(1 - f*0.82) + 0.035;
-          top.push(P(u, v - w)); bot.push(P(u, v + w)); pts.push([u, v, w]);
-        }
-        line(W, body); path(top); path(bot);
-        line(W*0.5, acc, 0.45); for(let i=1;i<N;i+=2) path([top[i], bot[i]]);
-        line(W*0.6, acc, 0.9);                                                                        // mane
-        for(let i=0;i<N;i++){ const [u, v, w] = pts[i]; path([P(u + 0.1, v - w), P(u - 0.02, v - w - 0.22 - (i%2)*0.1 + Math.sin(t*4 + i)*0.04), P(u - 0.12, v - w)]); }
-        line(W*0.8, body);                                                                            // clawed legs
-        for(const i of [3, 8]){
-          const [u, v, w] = pts[i];
-          path([P(u, v + w), P(u + 0.05, v + w + 0.28), P(u + 0.22, v + w + 0.38)]);
-          path([P(u, v - w), P(u + 0.05, v - w - 0.28), P(u + 0.22, v - w - 0.38)]);
-        }
-        line(W, body);
-        g.moveTo(...top[0]); g.lineTo(...P(0.9,-0.28)); g.lineTo(...P(1.35,-0.14)); g.lineTo(...P(1.4,0)); g.lineTo(...P(1.1,0.12)); g.lineTo(...P(0.9,0.3)); g.lineTo(...bot[0]);
-        line(W*0.6, acc);
-        const wh = Math.sin(t*2.4)*0.2;                                                               // whiskers
-        for(const sd of [-1,1]){ g.moveTo(...P(1.3, sd*0.05)); quad(P(1.9, sd*0.5 + wh*sd), P(2.5, sd*0.2 + wh)); }
-        path([P(0.55,-0.3), P(0.25,-0.8), P(0.05,-0.74)]); path([P(0.55,0.3), P(0.25,0.8), P(0.05,0.74)]);   // horns
-        eye(0.7, -0.14, Math.max(2, S*0.07));
-        const pp = P(2.3, 0.9 + wh), glow = 0.5 + 0.5*Math.sin(t*3);                                  // the dragon pearl
-        g.lineStyle(0); g.beginFill(0xffffff, 0.95); g.drawCircle(pp[0], pp[1], Math.max(3, S*0.12)); g.endFill();
-        g.beginFill(acc, 0.12 + 0.1*glow); g.drawCircle(pp[0], pp[1], S*0.4); g.endFill();
-        break;
-      }
-      case 'shark': {
-        const sw = Math.sin(t*3)*0.12;
-        line(W, body);
-        path([P(1.3,0), P(0.6,-0.5), P(-0.3,-0.45), P(-1.1+sw,-0.1), P(-1.5+sw,-0.6)]);
-        path([P(1.3,0), P(0.6,0.5), P(-0.3,0.45), P(-1.1+sw,0.1), P(-1.5+sw,0.6)]);
-        path([P(-1.1+sw,0), P(-1.5+sw,0.6)]); path([P(-1.1+sw,0), P(-1.5+sw,-0.6)]);
-        line(W*0.7, acc, 0.9);
-        path([P(0.1,-0.42), P(-0.2,-0.95), P(-0.5,-0.42)]);
-        path([P(0.2,0.42), P(-0.1,0.8), P(-0.4,0.42)]);
-        eye(0.75, -0.18, Math.max(1.8, S*0.07));
-        break;
-      }
-      case 'turtle': {
-        const fl = Math.sin(t*1.6)*0.25;
-        line(W, body); oval(0, 0, 1.15, 0.9, 26);
-        line(W*0.6, acc, 0.6); oval(0, 0, 0.72, 0.55, 18);
-        for(let k=0;k<6;k++){ const a = k/6*Math.PI*2 + 0.3; path([P(Math.cos(a)*0.72, Math.sin(a)*0.55), P(Math.cos(a)*1.15, Math.sin(a)*0.9)]); }
-        line(W*0.9, body);
-        g.moveTo(...P(1.1,-0.2)); quad(P(1.5,-0.25), P(1.7,0)); quad(P(1.5,0.25), P(1.1,0.2));
-        eye(1.5, -0.1, Math.max(1.6, S*0.05));
-        for(const sd of [-1,1]){
-          line(W*0.9, body);
-          path([P(0.55, sd*0.8), P(0.9, sd*(1.5 + fl)), P(0.25, sd*(2.0 + fl))]);
-          path([P(-0.7, sd*0.7), P(-0.95, sd*(1.2 - fl*0.5)), P(-0.55, sd*1.4)]);
-        }
-        line(W*0.7, body); path([P(-1.15, 0), P(-1.6, Math.sin(t*2)*0.12)]);
-        line(W*0.7, 0x6fd08a);                                                                        // a little island grows on its back
-        path([P(0.0,0.05), P(-0.45,0.05)]); path([P(-0.45,0.05), P(-0.6,0.3)]); path([P(-0.45,0.05), P(-0.6,-0.2)]); path([P(-0.45,0.05), P(-0.72,0.05)]);
-        break;
-      }
-      case 'serpent':
-      case 'leviathan': {
-        const lev = kind === 'leviathan';
-        const N = lev ? 20 : 18, seg = 0.42, top = [], bot = [], pts = [];
-        for(let i=0;i<=N;i++){
-          const f = i/N, u = 0.2 - i*seg, v = Math.sin(t*1.8 - i*0.45)*0.42*(0.35 + f), w = 0.42*(1 - f*0.88) + 0.04;
-          top.push(P(u, v - w)); bot.push(P(u, v + w)); pts.push([u, v, w]);
-        }
-        line(W, body); path(top); path(bot);
-        line(W*0.45, acc, 0.4); for(let i=1;i<=N;i++) path([top[i], bot[i]]);
-        line(W*0.7, acc, 0.9);
-        for(let i=1;i<N;i++){
-          const [u, v, w] = pts[i], l = (i%2 ? 0.28 : 0.4)*(lev ? 1.3 : 1)*(1 - i/N*0.6);
-          path([P(u + 0.12, v - w), P(u - 0.04, v - w - l), P(u - 0.2, v - w)]);
-        }
-        const open = 0.08 + (Math.sin(t*2.2) + 1)*0.1;
-        line(W, body);
-        g.moveTo(...top[0]); g.lineTo(...P(0.55,-0.42)); g.lineTo(...P(1.2,-0.28)); g.lineTo(...P(1.65,-0.08)); g.lineTo(...P(1.55,0));
-        g.moveTo(...bot[0]); g.lineTo(...P(0.5, 0.42 + open)); g.lineTo(...P(1.1, 0.3 + open)); g.lineTo(...P(1.5, 0.08 + open*1.4));
-        line(W*0.7, acc);
-        for(let k=0;k<4;k++) path([P(1.5 - k*0.2, -0.05 - k*0.01), P(1.46 - k*0.2, 0.1 + open*0.4)]);
-        path([P(1.5, 0.08 + open*1.4), P(1.7, 0.12 + open*1.6), P(1.9, 0.02 + open*0.8)]);
-        eye(0.75, -0.2, Math.max(2, S*0.07));
-        if(lev){ for(let k=0;k<3;k++) path([P(0.5 - k*0.16,-0.4), P(0.35 - k*0.2,-0.95 - k*0.1), P(0.2 - k*0.2,-0.42)]); }
-        else path([P(0.55,-0.4), P(0.2,-0.8), P(0.05,-0.62)]);
-        break;
-      }
-      case 'hydra': {
-        line(W, body); oval(-0.8, 0, 0.95, 0.7, 22);
-        line(W*0.6, acc, 0.5); for(let k=0;k<4;k++) path([P(-1.1 + k*0.2,-0.45), P(-1.0 + k*0.2,-0.75)]);
-        line(W*0.8, body);
-        g.moveTo(...P(-1.7, 0)); for(let j=1;j<=6;j++) g.lineTo(...P(-1.7 - j*0.3, Math.sin(t*2 + j*0.7)*0.15*j));
-        for(let k=0;k<3;k++){
-          const v0 = (k - 1)*0.36, ph = k*2.1, neck = [];
-          for(let j=0;j<=8;j++){ const f = j/8; neck.push([f*1.9, v0*(1 + f*2.1) + Math.sin(t*2.2 + ph + f*3)*0.2*f]); }
-          line(W*1.7, k === 1 ? body : acc, 0.9); path(neck.map(p => P(p[0], p[1])));
-          const hu = neck[8][0], hv = neck[8][1], dr = Math.atan2(hv - neck[7][1], hu - neck[7][0]), cd = Math.cos(dr), sd = Math.sin(dr);
-          const R = (a, b)=> P(hu + a*cd - b*sd, hv + a*sd + b*cd), op = 0.05 + (Math.sin(t*3 + ph) + 1)*0.07;
-          line(W, body);
-          path([R(-0.05,-0.2), R(0.4,-0.15), R(0.62,-0.02)]); path([R(-0.05,0.2), R(0.35,0.15 + op), R(0.6,0.04 + op)]);
-          const ep = R(0.18,-0.09); g.lineStyle(0); g.beginFill(acc); g.drawCircle(ep[0], ep[1], Math.max(1.6, S*0.045)); g.endFill();
-        }
-        break;
-      }
-      case 'charybdis': {
-        const rot = t*0.5;
-        for(let k=0;k<4;k++){
-          line(W*0.8, k%2 ? body : acc, 0.7);
-          for(let j=0;j<=26;j++){
-            const a = rot*1.6 + k*Math.PI/2 + j*0.24, r = 1.55 - j*0.05;
-            if(j) g.lineTo(...P(Math.cos(a)*r, Math.sin(a)*r)); else g.moveTo(...P(Math.cos(a)*r, Math.sin(a)*r));
-          }
-        }
-        const ring = (r0, wob, n)=>{ const pts = []; for(let i=0;i<n;i++){ const a = i/n*Math.PI*2, r = r0 + Math.sin(a*5 + t*2)*wob; pts.push(P(Math.cos(a)*r, Math.sin(a)*r)); } loop(pts); };
-        line(W, body); ring(1.05, 0.05, 36);
-        line(W*0.7, acc); ring(0.62, 0.04, 28);
-        line(W*0.9, acc);
-        for(let i=0;i<14;i++){ const a = rot*0.25 + i/14*Math.PI*2; path([P(Math.cos(a - 0.1)*1.02, Math.sin(a - 0.1)*1.02), P(Math.cos(a)*0.6, Math.sin(a)*0.6), P(Math.cos(a + 0.1)*1.02, Math.sin(a + 0.1)*1.02)]); }
-        dot(0, 0, S*0.38, 0x000000, 0.85);
-        break;
-      }
-    }
-    g.lineStyle(0);
-  }
-
-  function drawEnemy(e, now){
-    const t = now*0.004 + e.ph;
-    const pal = e.shooter ? [0xff5a5a, 0xffd0d0] : undefined;      // red guardians spit shots
-    if(e.kind === 'jelly'){
-      drawCreature(entG, 'jelly', e.x, e.y + Math.sin(t*1.5)*3, -Math.PI/2 + Math.sin(t)*0.12, 22, t, false, pal);
-      return;
-    }
-    const sp = Math.hypot(e.vx, e.vy);
-    if(sp > 0.05) e.dir = (e.dirSet ? lerpAngle(e.dir, Math.atan2(e.vy, e.vx), 0.15) : Math.atan2(e.vy, e.vx));
-    e.dirSet = true;
-    drawCreature(entG, e.kind, e.x, e.y + Math.sin(t*1.5)*2, e.dir || 0, 20, t, false, pal);
-  }
-
-  function drawBoss(b, now){
-    const t = now*0.004, flash = b.hit > 0;
-    if(b.state === 'wind'){                                     // telegraph ring (purple = it is about to blink)
-      entG.lineStyle(3, b.atk === 'blink' ? 0xd59bff : 0xff4a4a, 0.35 + 0.35*Math.sin(now*0.03));
-      entG.drawCircle(b.x, b.y, b.r + 16); entG.lineStyle(0);
-    }
-    if(b.elite && b.phase === 3){                               // enraged: a slow red pulse
-      entG.lineStyle(2, 0xff3a3a, 0.2 + 0.15*Math.sin(now*0.01));
-      entG.drawCircle(b.x, b.y, b.r + 8 + Math.sin(now*0.01)*4); entG.lineStyle(0);
-    }
-    if(b.shieldT > 0){                                          // bubble shield: nothing damages it
-      const k = clamp(b.shieldT/30, 0, 1), fl = 0.5 + 0.5*Math.sin(now*0.02);
-      entG.lineStyle(4, 0x9be8ff, (0.45 + 0.25*fl)*k); entG.drawCircle(b.x, b.y, b.r + 28);
-      entG.lineStyle(2, 0xffffff, 0.3*k); entG.drawCircle(b.x, b.y, b.r + 38 + fl*3);
-      entG.lineStyle(0); entG.beginFill(0x9be8ff, 0.06*k); entG.drawCircle(b.x, b.y, b.r + 28); entG.endFill();
-    }
-    if(b.kind === 'shark'){
-      bossG.visible = true; bossG.x = b.x; bossG.y = b.y; bossG.rotation = b.ang;
-      const cols = flash ? { body:0xffffff, fin:0xffffff } : (b.cols || SHARK_COLORS);
-      drawFishShape(bossG, b.r*0.9, cols, t*3.2, b.state === 'charge' ? 1 : 0.45, Math.sin(t)*0.2);
-      return;
-    }
-    bossG.visible = false;
-    const S = (BOSS_SCALE[b.kind] || 0.9)*b.r;
-    let ang = b.ang;
-    if(b.kind === 'ghostship'){ if(Math.abs(b.vx) > 0.25) b.face = b.vx > 0 ? 1 : -1; else if(!b.face) b.face = -1; ang = b.face > 0 ? 0 : Math.PI; }
-    else if(b.kind === 'jelly') ang = -Math.PI/2 + Math.sin(t)*0.12;
-    drawCreature(entG, b.kind, b.x, b.y, ang, S, t, flash, b.pal);
-  }
-
-  function drawEntities(now){
-    const d = M.d;
-    entG.clear();
-    const s = M.start;
-    entG.lineStyle(3, 0x9be8ff, 0.6);
-    for(let i=0;i<3;i++) entG.drawCircle(s.x, s.y, 14 + i*7 + Math.sin(now*0.004 + i)*2);
-    entG.lineStyle(0);
-    for(const p of M.pearls){
-      if(p.got) continue;
-      entG.beginFill(0xffffff, 0.9); entG.drawCircle(p.x, p.y, 6); entG.endFill();
-      entG.beginFill(d.accent, 0.25); entG.drawCircle(p.x, p.y, 16 + Math.sin(now*0.005 + p.x)*3); entG.endFill();
-    }
-    if(M.orbOn){
-      const o = M.orb, pu = 0.5 + 0.5*Math.sin(now*0.004);
-      for(let i=3;i>=1;i--){ entG.beginFill(d.accent, 0.08*i); entG.drawCircle(o.x, o.y, 22 + i*14 + pu*8); entG.endFill(); }
-      entG.beginFill(0xffffff); entG.drawCircle(o.x, o.y, 12); entG.endFill();
-      entG.lineStyle(3, d.accent, 0.9); entG.drawCircle(o.x, o.y, 26); entG.lineStyle(0);
-    }
-    if(M.ink){
-      const k = clamp(M.ink.life/60, 0, 1);
-      for(let i=0;i<7;i++){
-        const a = i*0.9 + now*0.0004*(i%2 ? 1 : -1), rr = i === 0 ? 0 : M.ink.r*0.5;
-        entG.beginFill(0x1a0f2e, 0.22*k); entG.drawCircle(M.ink.x + Math.cos(a)*rr, M.ink.y + Math.sin(a)*rr, M.ink.r*(i === 0 ? 0.8 : 0.55)); entG.endFill();
-      }
-      entG.lineStyle(2, 0x8a6aff, 0.25*k); entG.drawCircle(M.ink.x, M.ink.y, M.ink.r); entG.lineStyle(0);
-    }
-    if(M.vortex){
-      const V = M.vortex, k = clamp(V.life/40, 0, 1);
-      for(let j=0;j<3;j++){
-        entG.lineStyle(2.5, 0xcff6ff, 0.55*k);
-        for(let i=0;i<=30;i++){
-          const a = now*0.008 + j*2.1 + i*0.3, r = 8 + i*5, px = V.x + Math.cos(a)*r, py = V.y + Math.sin(a)*r;
-          if(i) entG.lineTo(px, py); else entG.moveTo(px, py);
-        }
-      }
-      entG.lineStyle(0);
-    }
-    for(const h of M.hazards){
-      const phase=(h.tick||0), activeHazard=phase>95&&phase<155, warning=phase>60&&phase<=95;
-      const pulse=0.55+0.35*Math.sin(now*0.009+h.phase);
-      const hc=d.skyTheme ? d.skyTheme.hazardColor : d.accent, hr=h.r+(activeHazard?Math.sin(now*0.02)*5:0);
-      entG.lineStyle(activeHazard?4:2,hc,activeHazard?0.95:(warning?0.7:0.24));
-      if(h.kind===0){ entG.drawCircle(h.x,h.y,hr); entG.drawCircle(h.x,h.y,hr*0.58); }
-      else if(h.kind===1){ entG.moveTo(h.x,h.y-hr); entG.lineTo(h.x+hr,h.y); entG.lineTo(h.x,h.y+hr); entG.lineTo(h.x-hr,h.y); entG.lineTo(h.x,h.y-hr); }
-      else if(h.kind===2){ entG.moveTo(h.x-hr,h.y); entG.lineTo(h.x+hr,h.y); entG.moveTo(h.x,h.y-hr); entG.lineTo(h.x,h.y+hr); entG.drawCircle(h.x,h.y,hr*0.55); }
-      else if(h.kind===3){ entG.drawCircle(h.x,h.y,hr); entG.drawCircle(h.x+hr*0.25,h.y-hr*0.18,hr*0.52); }
-      else { for(let k=0;k<8;k++){const a=k*Math.PI/4+now*0.001;entG.moveTo(h.x+Math.cos(a)*hr*0.35,h.y+Math.sin(a)*hr*0.35);entG.lineTo(h.x+Math.cos(a)*hr,h.y+Math.sin(a)*hr);} }
-      entG.lineStyle(0);
-      if(activeHazard){ entG.beginFill(d.skyTheme.hazardColor,0.12); entG.drawCircle(h.x,h.y,h.r); entG.endFill(); }
-      else if(warning){ entG.beginFill(d.skyTheme.hazardColor,0.06*pulse); entG.drawCircle(h.x,h.y,h.r); entG.endFill(); }
-    }
-    if(M.treasure){
-      const tr=M.treasure, r=tr.room;
-      if(tr.active&&!tr.got){
-        const pulse=0.65+0.35*Math.sin(now*0.006);
-        entG.lineStyle(3,d.skyTheme.hazardColor,0.8); entG.drawCircle(tr.x,tr.y,22+pulse*5);
-        entG.lineStyle(0); entG.beginFill(0xffd36a,0.95); entG.drawRoundedRect(tr.x-14,tr.y-10,28,22,4); entG.endFill();
-        entG.lineStyle(3,0xffffff,0.9); entG.moveTo(tr.x-14,tr.y-2); entG.lineTo(tr.x+14,tr.y-2); entG.moveTo(tr.x,tr.y-10); entG.lineTo(tr.x,tr.y+12); entG.lineStyle(0);
-      } else if(!tr.got){
-        // A tiny glint at the sealed chest hints that the vault is worth returning to.
-        entG.lineStyle(2,d.skyTheme.hazardColor,0.25+0.15*Math.sin(now*0.003)); entG.drawCircle(tr.x,tr.y,9); entG.lineStyle(0);
-      }
-    }
-    for(const e of M.guards) drawEnemy(e, now);
-    if(!M.boss.dead) drawBoss(M.boss, now); else bossG.visible = false;
-    for(const p of M.shots){
-      entG.lineStyle({ width:2.5, color:p.home ? 0xff7ad9 : 0xff6b6b, alpha:0.95, ...ROUND }); entG.drawCircle(p.x, p.y, p.home ? 12 : 10);
-      entG.lineStyle(0); entG.beginFill(p.home ? 0xffd0f2 : 0xffb3b3, 0.9); entG.drawCircle(p.x, p.y, 3.5); entG.endFill();
-    }
-    for(const p of M.bubs){
-      entG.lineStyle(p.big ? 4 : 2, p.pierce ? 0xffd36a : 0xcff6ff, 0.9);
-      entG.drawCircle(p.x, p.y, p.r || 7);
-    }
-    for(const f of M.fx){
-      const k = 1 - f.life/f.max;
-      if(f.type === 'ring'){ entG.lineStyle(4*(1 - k) + 1, f.col, 0.8*(1 - k)); entG.drawCircle(f.x, f.y, f.r1*k); }
-      else if(f.type === 'wave'){
-        entG.lineStyle(10*(1 - k) + 2, 0x9be8ff, 0.7*(1 - k)); entG.drawCircle(f.x, f.y, f.r1*k);
-        entG.lineStyle(4, 0xffffff, 0.5*(1 - k)); entG.drawCircle(f.x, f.y, f.r1*k*0.92);
-      } else if(f.type === 'bolt'){
-        entG.lineStyle(3, 0xfff6a0, 0.95*(1 - k)); entG.moveTo(f.x0, f.y0);
-        const n = 8, dx = f.x1 - f.x0, dy = f.y1 - f.y0, len = Math.hypot(dx, dy) || 1;
-        for(let i=1;i<n;i++){ const j = (Math.random() - 0.5)*30; entG.lineTo(f.x0 + dx*i/n - dy/len*j, f.y0 + dy*i/n + dx/len*j); }
-        entG.lineTo(f.x1, f.y1);
-      }
-    }
-    entG.lineStyle(0);
-  }
-
-  function drawMap(){
-    const c = M.cell, m = M.m, d = M.d, x = mapCtx;
-    x.clearRect(0,0,mapEl.width,mapEl.height);
-    for(let ty=0; ty<m.H; ty++) for(let tx=0; tx<m.W; tx++){
-      if(!M.seen[ty][tx]) continue;
-      x.fillStyle = m.g[ty][tx] === 1 ? '#' + d.wall.toString(16).padStart(6,'0') : 'rgba(223,246,255,0.22)';
-      x.fillRect(tx*c, ty*c, c, c);
-    }
-    const dot = (wx, wy, col, rr)=>{
-      const tx = Math.floor(wx/T), ty = Math.floor(wy/T);
-      if(!M.seen[ty] || !M.seen[ty][tx]) return;
-      x.fillStyle = col; x.beginPath(); x.arc(wx/T*c, wy/T*c, rr, 0, Math.PI*2); x.fill();
+  function spawnJellyfish(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Jellyfish', 26);
+    return {
+      type:'jelly',
+      x, y, baseY: y,
+      color: JELLY_COLORS[randi(0,JELLY_COLORS.length-1)],
+      phase: rand(0,Math.PI*2),
+      driftPhase: rand(0,Math.PI*2),
+      size: rand(14,24),
+      tentacles: randi(4,6),
+      g
     };
-    dot(M.start.x, M.start.y, '#9be8ff', c*0.5);
-    if(M.orbOn) dot(M.orb.x, M.orb.y, '#ffffff', c*0.6);
-    if(M.treasure && M.treasure.active && !M.treasure.got) dot(M.treasure.x,M.treasure.y,'#ffd36a',c*0.65);
-    if(M.boss.active && !M.boss.dead) dot(M.boss.x, M.boss.y, '#ff9d00', c*0.9);
-    for(const e of M.guards) dot(e.x, e.y, '#ff4a4a', c*0.45);
-    x.fillStyle = '#ffb36b'; x.beginPath(); x.arc(player.x/T*c, player.y/T*c, c*0.55, 0, Math.PI*2); x.fill();
   }
 
-  /* ------------------------------------------------------------- per frame */
+  function updateJelly(j, dt){
+    j.phase += 0.025*dt;
+    j.driftPhase += 0.006*dt;
+    j.y = clamp(j.baseY + Math.sin(j.driftPhase)*45, WORLD_TOP_MARGIN+40, 7500);
+    j.x += Math.sin(j.driftPhase*1.3)*0.25*dt;
 
-  function update(dt){
-    const now = performance.now();
-    if(dashT > 0) dashT -= dt;
-    if(dashCd > 0) dashCd -= dt;
-    if(shieldT > 0) shieldT -= dt;
-    if(shieldCd > 0) shieldCd -= dt;
-    if(formCd > 0) formCd -= dt;
-    if(invuln > 0) invuln -= dt;
-    if(enterCd > 0) enterCd -= dt;
-    const wasGhost = TM.ghost > 0;
-    for(const id of TIMED){ if(TM[id] > 0) TM[id] -= dt; if(CD[id] > 0) CD[id] -= dt; }
-    if(wasGhost && TM.ghost <= 0 && active && M) unstick();
-
-    updateUpgradeOffer(dt);
-    refreshBar();
-    drawAura(now);
-    updateCompass();
-    if(!isStarted() && !active){ caveG.clear(); return; }
-    if(active) updateDungeon(dt, now);
-    else { drawEntrances(now); checkEnter(); }
+    j.g.x = j.x; j.g.y = j.y;
+    redrawJelly(j);
   }
 
-  /* ----------------------------------------------- hooks used by game.js */
+  function redrawJelly(j){
+    const g = j.g;
+    g.clear();
+    const pulse = 1 + Math.sin(j.phase*3)*0.18;
+    const s = j.size;
 
-  function speedMul(){ return look().speed * (TM.surge > 0 ? 2.6 : dashT > 0 ? 2.4 : 1); }   // Overdrive outlasts and outruns the dash
-  function gravityMul(){ return (has('wings') && keys.space) ? 0.2 : 1; }
-  function levelBonus(){ return look().level; }
-  function eatMul(){ return TM.magnet > 0 ? 1.7 : 1; }          // Pearl Magnet widens your bite in open water too
-  function depth(){ return M ? Math.round(baseY(M.d)/8) : 0; }
+    g.lineStyle(1.6, j.color, 0.8);
+    g.moveTo(-s*pulse, 0);
+    g.quadraticCurveTo(-s*0.7*pulse, -s*0.95, 0, -s*0.95);
+    g.quadraticCurveTo(s*0.7*pulse, -s*0.95, s*pulse, 0);
+    g.quadraticCurveTo(0, s*0.35, -s*pulse, 0);
 
-  /* ---------------------------------------------------- /dungeon command */
-
-  function command(args){
-    const sub = (args[0] || 'list').toLowerCase();
-    if(sub === 'exit'){
-      if(!active) return [['Not inside a cave.', 'err']];
-      exitDungeon(); return [['Left the cave.', 'ok']];
+    for(let i=0;i<j.tentacles;i++){
+      const tx = lerp(-s*0.8, s*0.8, i/(j.tentacles-1));
+      g.lineStyle(1.6, j.color, 0.5);
+      g.moveTo(tx, s*0.2);
+      for(let seg=1;seg<=4;seg++){
+        const ny = s*0.2 + seg*s*0.45;
+        const nx = tx + Math.sin(j.phase*4 + i + seg)*s*0.22;
+        g.lineTo(nx, ny);
+      }
     }
-    if(sub === 'reset'){
-      save.cleared = []; save.form = 'fish'; save.glow = false; persist();
-      TIMED.forEach(id => { TM[id] = 0; CD[id] = 0; });
-      return [['Cave progress and abilities reset.', 'ok']];
-    }
-    if(sub === 'unlock'){
-      save.cleared = DUNGEONS.map(d=>d.id); persist();
-      return [['All abilities unlocked.', 'ok']];
-    }
-    if(sub === 'upgrades'){
-      return [[`Upgrades: ${save.up.hearts}/${UP_CAP.hearts} hearts (${maxHp()} total), ${save.up.rate}/${UP_CAP.rate} bubble rate (${Math.round(rateMul()*100)}%), ${save.up.str}/${UP_CAP.str} strength (${Math.round(strMul()*100)}%). ${upOwed()} pick(s) waiting. One pick every 3 levels.`, 'info']];
-    }
-    if(sub === 'ready'){
-      TIMED.forEach(id => { CD[id] = 0; }); dashCd = shieldCd = 0;
-      return [['All ability cooldowns refreshed.', 'ok']];
-    }
-    const n = parseInt(sub, 10);
-    if(n >= 1 && n <= DUNGEONS.length){
-      if(active) exitDungeon();
-      const d = DUNGEONS[n-1];
-      const p = exitPos(d, 260); player.x = p.x; player.y = p.y; player.vx = player.vy = 0; enterCd = 120;
-      return [[`Teleported beside ${d.name}.`, 'ok']];
-    }
-    const lines = [['Caves in order (/dungeon <1-35> teleports, exit, reset, unlock, ready, upgrades):', 'info']];
-    for(const d of DUNGEONS){
-      const ab = ABILITIES[d.ability], dx = d.x - player.x;
-      const dir = Math.abs(dx) < 100 ? 'right here' : (dx > 0 ? 'east ' : 'west ') + Math.round(Math.abs(dx)/8) + ' m';
-      const where = placeOf(d);
-      lines.push([`${d.id}. ${d.legend ? '✦ ' : ''}${d.name} [${regionOf(d)}]: ${dir}, ${where}. Boss: ${d.boss.name}. ${save.cleared.includes(d.id) ? '[cleared] ' : ''}-> ${ab.name} (${ab.key})`, 'info']);
-    }
-    return lines;
   }
+
+  /* ============================= CRABS ============================= */
+
+  function spawnCrab(x){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Crab', 18);
+    return {
+      type:'crab',
+      x,
+      dir: Math.random()<0.5?-1:1,
+      walkPhase: rand(0,Math.PI*2),
+      color: Math.random()<0.5 ? 0xff7a5c : 0xe0552f,
+      size: rand(8,13),
+      pauseTimer: rand(60,180),
+      g
+    };
+  }
+
+  function updateCrab(c, dt){
+    c.pauseTimer -= dt;
+    if(c.pauseTimer <= 0){
+      if(Math.random() < 0.5) c.dir *= -1;
+      c.pauseTimer = rand(60,220);
+    }
+    c.x += c.dir * 0.5 * dt;
+    c.walkPhase += 0.25*dt;
+
+    const fy = floorY(c.x);
+    c.g.x = c.x; c.g.y = fy - c.size*0.3;
+    c.g.scale.x = c.dir < 0 ? -1 : 1;
+    redrawCrab(c);
+  }
+
+  function redrawCrab(c){
+    const g = c.g;
+    g.clear();
+    const s = c.size;
+    const legSwing = Math.sin(c.walkPhase) * 0.35;
+
+    g.lineStyle({ width: Math.max(1.3, s*0.13), color: c.color, ...ROUND });
+    g.drawEllipse(0,0, s, s*0.62);
+
+    g.moveTo(-s*0.3, -s*0.5); g.lineTo(-s*0.4, -s*0.85);
+    g.moveTo(s*0.3, -s*0.5); g.lineTo(s*0.4, -s*0.85);
+
+    g.moveTo(-s*0.95, -s*0.1);
+    g.lineTo(-s*1.5, -s*0.5 + legSwing*s*0.4);
+    g.moveTo(s*0.95, -s*0.1);
+    g.lineTo(s*1.5, -s*0.5 - legSwing*s*0.4);
+
+    for(let i=0;i<3;i++){
+      const lx = lerp(-s*0.7, s*0.7, i/2);
+      const sw = Math.sin(c.walkPhase + i*1.3) * s*0.4;
+      g.moveTo(lx, s*0.4);
+      g.lineTo(lx + sw*0.4, s*0.95 + Math.abs(sw)*0.2);
+    }
+  }
+
+  /* ============================= TURTLES ============================= */
+
+  function spawnTurtle(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Sea Turtle', 32);
+    return {
+      type:'turtle',
+      x, y,
+      vx: rand(-1,1)||0.5, vy: rand(-0.2,0.2),
+      targetX: x + rand(-400,400),
+      targetY: clamp(y + rand(-150,150), WORLD_TOP_MARGIN+80, 7500),
+      retarget: rand(200,400),
+      angle: 0, displayAngle:0,
+      flipperPhase: rand(0,Math.PI*2),
+      size: rand(22,30),
+      g
+    };
+  }
+
+  function updateTurtle(t, dt){
+    t.retarget -= dt;
+    if(t.retarget <= 0){
+      t.targetX = t.x + rand(-500,500);
+      t.targetY = clamp(t.y + rand(-200,200), WORLD_TOP_MARGIN+80, 7500);
+      t.retarget = rand(250,450);
+    }
+    const dx = t.targetX-t.x, dy = t.targetY-t.y;
+    const d = Math.hypot(dx,dy)||1;
+    t.vx = lerp(t.vx, (dx/d)*0.9, 0.01*dt);
+    t.vy = lerp(t.vy, (dy/d)*0.9, 0.01*dt);
+    t.x += t.vx*dt; t.y += t.vy*dt;
+    t.angle = Math.atan2(t.vy, t.vx);
+    t.displayAngle = lerpAngle(t.displayAngle, t.angle, 0.03*dt);
+    t.flipperPhase += 0.05*dt;
+
+    t.g.x = t.x; t.g.y = t.y; orient(t.g, t.displayAngle);
+    redrawTurtle(t);
+  }
+
+  function redrawTurtle(t){
+    const g = t.g;
+    g.clear();
+    const s = t.size;
+    g.lineStyle({ width: Math.max(1.6, s*0.07), color: 0x5fd17a, ...ROUND });
+    g.drawEllipse(0,0, s*0.95, s*0.65);
+
+    g.lineStyle({ width: Math.max(1.6, s*0.07), color: 0x5fd17a, alpha:0.5, ...ROUND });
+    g.moveTo(-s*0.5,-s*0.3); g.lineTo(s*0.5,-s*0.3);
+    g.moveTo(-s*0.5,0); g.lineTo(s*0.5,0);
+    g.moveTo(-s*0.5,s*0.3); g.lineTo(s*0.5,s*0.3);
+
+    g.lineStyle({ width: Math.max(1.6, s*0.07), color: 0x5fd17a, ...ROUND });
+    g.moveTo(s*0.85,0); g.lineTo(s*1.25, 0);
+
+    const fw = Math.sin(t.flipperPhase)*0.5;
+    g.moveTo(s*0.2, -s*0.5); g.lineTo(s*0.55, -s*0.95 + fw*s*0.3);
+    g.moveTo(-s*0.5, -s*0.4); g.lineTo(-s*0.85, -s*0.8 - fw*s*0.3);
+    g.moveTo(s*0.2, s*0.5); g.lineTo(s*0.55, s*0.95 - fw*s*0.3);
+    g.moveTo(-s*0.5, s*0.4); g.lineTo(-s*0.85, s*0.8 + fw*s*0.3);
+  }
+
+  /* ============================= SHARKS ============================= */
+
+  function spawnShark(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Shark', 42);
+    return {
+      type:'shark',
+      x, y,
+      vx: Math.random()<0.5?-1:1, vy: 0,
+      targetX: x + (Math.random()<0.5?-1:1)*rand(900,1500),
+      angle:0, displayAngle:0,
+      tailPhase: rand(0,10),
+      size: rand(34,46),
+      life: rand(900,1500),
+      g
+    };
+  }
+
+  function updateShark(sh, dt){
+    const dx = sh.targetX - sh.x;
+    const speedMult = ctx.options.difficulty === 'hard' ? 1.35 : (ctx.options.difficulty === 'peaceful' ? 0.8 : 1);
+    sh.vx = lerp(sh.vx, Math.sign(dx)*2.1*speedMult, 0.01*dt);
+    sh.vy = lerp(sh.vy, Math.sin(performance.now()*0.0006+sh.x*0.001)*0.4, 0.02*dt);
+    sh.x += sh.vx*dt; sh.y += sh.vy*dt;
+    sh.y = clamp(sh.y, WORLD_TOP_MARGIN+100, 7500);
+    sh.angle = Math.atan2(sh.vy, sh.vx);
+    sh.displayAngle = lerpAngle(sh.displayAngle, sh.angle, 0.05*dt);
+    const sharkAngleDiff = ((sh.angle - sh.displayAngle + Math.PI) % (Math.PI*2)) - Math.PI;
+    sh.bank = clamp(sharkAngleDiff * 1.6, -1, 1);
+    sh.tailPhase += 0.1*dt*3;
+    sh.life -= dt;
+
+    sh.g.x = sh.x; sh.g.y = sh.y; orient(sh.g, sh.displayAngle);
+    drawFishShape(sh.g, sh.size, SHARK_COLORS, sh.tailPhase, 1, sh.bank);
+  }
+
+  /* ============================= OCTOPUS ============================= */
+
+  function spawnOctopus(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Octopus', 28);
+    return {
+      type:'octopus',
+      x, y,
+      vx:0, vy:0,
+      angle:0, displayAngle:0,
+      targetX: x + rand(-300,300),
+      targetY: clamp(y + rand(-150,150), WORLD_TOP_MARGIN+60, 7500),
+      retarget: rand(150,300),
+      jetTimer: rand(60,160),
+      jetPower: 0,
+      tentaclePhase: rand(0,Math.PI*2),
+      size: rand(14,20),
+      color: Math.random()<0.5 ? 0xb46fd1 : 0xd16f9e,
+      g
+    };
+  }
+
+  function updateOctopus(o, dt){
+    o.retarget -= dt;
+    o.jetTimer -= dt;
+    if(o.retarget <= 0){
+      o.targetX = o.x + rand(-350,350);
+      o.targetY = clamp(o.y + rand(-180,180), WORLD_TOP_MARGIN+60, 7500);
+      o.retarget = rand(180,360);
+    }
+    if(o.jetTimer <= 0){
+      const dx = o.targetX-o.x, dy = o.targetY-o.y, d = Math.hypot(dx,dy)||1;
+      o.vx += (dx/d)*2.2;
+      o.vy += (dy/d)*2.2;
+      o.jetPower = 1;
+      o.jetTimer = rand(70,150);
+    }
+    o.vx *= Math.pow(0.9, dt);
+    o.vy *= Math.pow(0.9, dt);
+    o.x += o.vx*dt; o.y += o.vy*dt;
+    o.y = clamp(o.y, WORLD_TOP_MARGIN+40, 7500);
+    o.jetPower = lerp(o.jetPower, 0, 0.05*dt);
+
+    const speed = Math.hypot(o.vx,o.vy);
+    if(speed > 0.05){ o.angle = Math.atan2(o.vy,o.vx); }
+    o.displayAngle = lerpAngle(o.displayAngle, o.angle, 0.04*dt);
+    o.tentaclePhase += 0.08*dt*(1+o.jetPower);
+
+    o.g.x = o.x; o.g.y = o.y; orient(o.g, o.displayAngle);
+    redrawOctopus(o);
+  }
+
+  function redrawOctopus(o){
+    const g = o.g;
+    g.clear();
+    const s = o.size;
+    const squish = 1 - o.jetPower*0.25;
+
+    const n = 6;
+    for(let i=0;i<n;i++){
+      const by = lerp(-s*0.55, s*0.55, i/(n-1));
+      g.lineStyle({ width: Math.max(1.2, s*0.06), color: o.color, alpha:0.85, ...ROUND });
+      g.moveTo(-s*0.3, by*0.5);
+      for(let seg=1; seg<=3; seg++){
+        const t = seg/3;
+        const wob = Math.sin(o.tentaclePhase + i*0.7 + seg) * s*0.25*(1+o.jetPower);
+        g.lineTo(-s*(0.5+t*0.9), by + wob);
+      }
+    }
+
+    g.lineStyle({ width: Math.max(1.6, s*0.09), color: o.color, ...ROUND });
+    g.drawEllipse(0, 0, s*squish, s*0.85);
+
+  }
+
+  /* ============================= SEAHORSE ============================= */
+
+  function spawnSeahorse(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Seahorse', 18);
+    return {
+      type:'seahorse',
+      x, y, baseY:y,
+      phase: rand(0,Math.PI*2),
+      driftPhase: rand(0,Math.PI*2),
+      dir: Math.random()<0.5 ? -1 : 1,
+      size: rand(10,15),
+      color: [0xffb347,0xffd76b,0xff8c69,0xc9a0ff][randi(0,3)],
+      g
+    };
+  }
+
+  function updateSeahorse(h, dt){
+    h.phase += 0.05*dt;
+    h.driftPhase += 0.008*dt;
+    h.y = clamp(h.baseY + Math.sin(h.driftPhase)*30, WORLD_TOP_MARGIN+40, 7500);
+    h.x += Math.sin(h.phase*0.3)*0.12*dt*h.dir;
+    if(Math.random() < 0.002) h.dir *= -1;
+
+    h.g.x = h.x; h.g.y = h.y;
+    h.g.scale.x = h.dir < 0 ? -1 : 1;
+    redrawSeahorse(h);
+  }
+
+  function redrawSeahorse(h){
+    const g = h.g;
+    g.clear();
+    const s = h.size;
+    const bob = Math.sin(h.phase*2)*s*0.06;
+
+    g.lineStyle({ width: Math.max(1.5, s*0.13), color: h.color, ...ROUND });
+    g.moveTo(0, s*0.9+bob);
+    g.quadraticCurveTo(-s*0.5, s*0.3+bob, -s*0.1, -s*0.2+bob);
+    g.quadraticCurveTo(s*0.45, -s*0.6+bob, s*0.05, -s*1.0+bob);
+    g.lineTo(s*0.55, -s*1.15+bob);
+    g.moveTo(0, s*0.9+bob);
+    g.quadraticCurveTo(s*0.35, s*1.15+bob, s*0.15, s*1.4+bob);
+
+    const finWag = Math.sin(h.phase*5)*0.3;
+    g.lineStyle({ width:1.2, color: h.color, alpha:0.6 });
+    g.moveTo(-s*0.15, -s*0.1+bob);
+    g.lineTo(-s*0.4+finWag*s*0.2, s*0.05+bob);
+
+  }
+
+  /* ============================= STINGRAY ============================= */
+
+  function spawnStingray(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Stingray', 34);
+    return {
+      type:'stingray',
+      x, y,
+      vx: rand(-1,1)||0.6, vy:0,
+      targetX: x + rand(-500,500),
+      targetY: clamp(y + rand(-100,100), WORLD_TOP_MARGIN+80, 7500),
+      retarget: rand(200,400),
+      angle:0, displayAngle:0,
+      wingPhase: rand(0,Math.PI*2),
+      size: rand(20,30),
+      color: 0x6f7fae,
+      g
+    };
+  }
+
+  function updateStingray(r, dt){
+    r.retarget -= dt;
+    if(r.retarget <= 0){
+      r.targetX = r.x + rand(-600,600);
+      r.targetY = clamp(r.y + rand(-150,150), WORLD_TOP_MARGIN+80, 7500);
+      r.retarget = rand(220,420);
+    }
+    const dx = r.targetX-r.x, dy = r.targetY-r.y, d = Math.hypot(dx,dy)||1;
+    r.vx = lerp(r.vx, (dx/d)*1.1, 0.008*dt);
+    r.vy = lerp(r.vy, (dy/d)*1.1, 0.008*dt);
+    r.x += r.vx*dt; r.y += r.vy*dt;
+    r.angle = Math.atan2(r.vy, r.vx);
+    r.displayAngle = lerpAngle(r.displayAngle, r.angle, 0.02*dt);
+    r.wingPhase += 0.07*dt;
+
+    r.g.x = r.x; r.g.y = r.y; orient(r.g, r.displayAngle);
+    redrawStingray(r);
+  }
+
+  function redrawStingray(r){
+    const g = r.g;
+    g.clear();
+    const s = r.size;
+    const wing = Math.sin(r.wingPhase)*s*0.3;
+
+    g.lineStyle({ width: Math.max(1.6, s*0.08), color: r.color, ...ROUND });
+    g.moveTo(s*0.9, 0);
+    g.quadraticCurveTo(s*0.2, -s*0.9+wing, -s*0.7, -s*0.15);
+    g.quadraticCurveTo(-s*0.3, 0, -s*0.7, s*0.15);
+    g.quadraticCurveTo(s*0.2, s*0.9-wing, s*0.9, 0);
+
+    g.lineStyle({ width: Math.max(1, s*0.04), color: r.color, alpha:0.8 });
+    g.moveTo(-s*0.5, 0);
+    g.lineTo(-s*1.6, Math.sin(r.wingPhase*1.5)*s*0.2);
+
+  }
+
+  /* ============================= MORAY EEL ============================= */
+
+  function spawnEel(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Moray Eel', 28);
+    return {
+      type:'eel',
+      x, y,
+      vx: Math.random()<0.5 ? -1 : 1,
+      targetX: x + rand(-300,300),
+      phase: rand(0,Math.PI*2),
+      size: rand(16,22),
+      segments: 7,
+      floorOffset: rand(20,55),
+      color: 0x5a8a4a,
+      g
+    };
+  }
+
+  function updateEel(e, dt){
+    const dx = e.targetX - e.x;
+    if(Math.abs(dx) < 20){ e.targetX = e.x + rand(150,300) * (Math.random()<0.5?-1:1); }
+    e.vx = lerp(e.vx, Math.sign(dx)*0.7, 0.01*dt);
+    e.x += e.vx*dt;
+    const desiredY = clamp(floorY(e.x) - e.floorOffset, WORLD_TOP_MARGIN+60, 7500);
+    e.y = lerp(e.y, desiredY, 0.02*dt);
+    e.phase += 0.1*dt;
+
+    e.g.x = e.x; e.g.y = e.y;
+    e.g.scale.x = e.vx < 0 ? -1 : 1;
+    redrawEel(e);
+  }
+
+  function redrawEel(e){
+    const g = e.g;
+    g.clear();
+    const s = e.size;
+    const segs = e.segments;
+
+    g.lineStyle({ width: Math.max(1.6, s*0.16), color: e.color, ...ROUND });
+    g.moveTo(s*1.1, 0);
+    for(let i=1;i<=segs;i++){
+      const t = i/segs;
+      const nx = s*1.1 - t*s*2.4;
+      const ny = Math.sin(e.phase*3 - t*5) * s*0.35*t;
+      g.lineTo(nx, ny);
+    }
+
+  }
+
+  /* ============================= STARFISH ============================= */
+
+  function spawnStarfish(x){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Starfish', 16);
+    return {
+      type:'starfish',
+      x, y: floorY(x),
+      size: rand(8,13),
+      color: [0xff7a5c,0xffa55c,0xc75cff][randi(0,2)],
+      rot: rand(0,Math.PI*2),
+      pulsePhase: rand(0,Math.PI*2),
+      g
+    };
+  }
+
+  function updateStarfish(st, dt){
+    st.pulsePhase += 0.02*dt;
+    st.y = floorY(st.x) - st.size*0.25;
+    st.g.x = st.x; st.g.y = st.y; st.g.rotation = st.rot;
+    redrawStarfish(st);
+  }
+
+  function redrawStarfish(st){
+    const g = st.g;
+    g.clear();
+    const s = st.size * (1 + Math.sin(st.pulsePhase)*0.04);
+    const arms = 5;
+
+    g.lineStyle({ width: Math.max(1.4, s*0.16), color: st.color, ...ROUND });
+    g.moveTo(s, 0);
+    for(let i=1;i<=arms;i++){
+      const a = (i/arms)*Math.PI*2 - Math.PI/2;
+      const aMid = ((i-0.5)/arms)*Math.PI*2 - Math.PI/2;
+      g.lineTo(Math.cos(aMid)*s*0.35, Math.sin(aMid)*s*0.35);
+      g.lineTo(Math.cos(a)*s, Math.sin(a)*s);
+    }
+  }
+
+  /* ============================= SEA URCHIN ============================= */
+
+  function spawnSeaUrchin(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Sea Urchin', 20);
+    return {
+      type:'seahub',
+      x, y: floorY(x),
+      size: rand(10,16),
+      phase: rand(0,Math.PI*2),
+      color: [0xff6b6b, 0xffa06b, 0x9b6bff][randi(0,2)],
+      g
+    };
+  }
+
+  function updateSeaUrchin(h, dt){
+    h.phase += 0.03*dt;
+    h.y = floorY(h.x) - h.size*0.2;
+    h.g.x = h.x; h.g.y = h.y;
+    redrawSeaUrchin(h);
+  }
+
+  function redrawSeaUrchin(h){
+    const g = h.g;
+    g.clear();
+    const s = h.size;
+    const spike = 8;
+
+    g.lineStyle({ width: Math.max(1.2, s*0.12), color: h.color, ...ROUND });
+    g.drawCircle(0, 0, s*0.5);
+
+    for(let i=0;i<spike;i++){
+      const ang = (i/spike)*Math.PI*2;
+      const wobble = Math.sin(h.phase + i)*s*0.15;
+      g.moveTo(0, 0);
+      g.lineTo(Math.cos(ang)*(s*0.5 + wobble), Math.sin(ang)*(s*0.5 + wobble));
+    }
+  }
+
+  /* ============================= PUFFERFISH ============================= */
+
+  function spawnPufferfish(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Pufferfish', 22);
+    return {
+      type:'pufferfish',
+      x, y,
+      vx: rand(-0.8,0.8), vy: rand(-0.5,0.5),
+      targetX: x + rand(-300,300),
+      targetY: clamp(y + rand(-150,150), WORLD_TOP_MARGIN+60, 7500),
+      retarget: rand(120,250),
+      puffPhase: 0,
+      size: rand(12,18),
+      color: 0xffd700,
+      g
+    };
+  }
+
+  function updatePufferfish(p, dt){
+    p.retarget -= dt;
+    if(p.retarget <= 0){
+      p.targetX = p.x + rand(-300,300);
+      p.targetY = clamp(p.y + rand(-150,150), WORLD_TOP_MARGIN+60, 7500);
+      p.retarget = rand(140,280);
+    }
+
+    const dx = p.targetX - p.x, dy = p.targetY - p.y;
+    const d = Math.hypot(dx, dy) || 1;
+    p.vx = lerp(p.vx, (dx/d)*0.8, 0.02*dt);
+    p.vy = lerp(p.vy, (dy/d)*0.8, 0.02*dt);
+    p.x += p.vx*dt;
+    p.y += p.vy*dt;
+    p.puffPhase += 0.04*dt;
+
+    p.g.x = p.x; p.g.y = p.y;
+    redrawPufferfish(p);
+  }
+
+  function redrawPufferfish(p){
+    const g = p.g;
+    g.clear();
+    const s = p.size;
+    const puff = 1 + Math.sin(p.puffPhase*2)*0.25;
+
+    g.lineStyle({ width: Math.max(1.4, s*0.12), color: p.color, ...ROUND });
+    g.drawCircle(0, 0, s*puff);
+
+    for(let i=0;i<8;i++){
+      const ang = (i/8)*Math.PI*2;
+      g.moveTo(0, 0);
+      g.lineTo(Math.cos(ang)*s*puff*1.3, Math.sin(ang)*s*puff*1.3);
+    }
+
+  }
+
+  /* ============================= NEW CREATURES ============================= */
+
+  /* ---- MANTA RAY ---- */
+  function spawnMantaRay(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Manta Ray', 50);
+    return {
+      type:'mantaray',
+      x, y,
+      vx: rand(-1,1)||0.5, vy:0,
+      targetX: x + rand(-800,800),
+      targetY: clamp(y + rand(-200,200), WORLD_TOP_MARGIN+100, 7000),
+      retarget: rand(300,500),
+      angle:0, displayAngle:0,
+      wingPhase: rand(0,Math.PI*2),
+      size: rand(40,55),
+      g
+    };
+  }
+
+  function updateMantaRay(m, dt){
+    m.retarget -= dt;
+    if(m.retarget <= 0){
+      m.targetX = m.x + rand(-900,900);
+      m.targetY = clamp(m.y + rand(-250,250), WORLD_TOP_MARGIN+100, 7000);
+      m.retarget = rand(350,550);
+    }
+    const dx = m.targetX-m.x, dy = m.targetY-m.y, d = Math.hypot(dx,dy)||1;
+    m.vx = lerp(m.vx, (dx/d)*1.3, 0.006*dt);
+    m.vy = lerp(m.vy, (dy/d)*1.3, 0.006*dt);
+    m.x += m.vx*dt; m.y += m.vy*dt;
+    m.angle = Math.atan2(m.vy, m.vx);
+    m.displayAngle = lerpAngle(m.displayAngle, m.angle, 0.015*dt);
+    m.wingPhase += 0.04*dt;
+
+    m.g.x = m.x; m.g.y = m.y; orient(m.g, m.displayAngle);
+    redrawMantaRay(m);
+  }
+
+  function redrawMantaRay(m){
+    const g = m.g;
+    g.clear();
+    const s = m.size;
+    const wing = Math.sin(m.wingPhase)*s*0.25;
+
+    g.lineStyle({ width: Math.max(2, s*0.06), color: 0x2a3a5a, ...ROUND });
+    g.moveTo(s*0.3, 0);
+    g.quadraticCurveTo(s*0.1, -s*0.7+wing, -s*0.8, -s*0.35);
+    g.quadraticCurveTo(-s*1.2, 0, -s*0.8, s*0.35);
+    g.quadraticCurveTo(s*0.1, s*0.7-wing, s*0.3, 0);
+
+    g.lineStyle({ width: Math.max(1, s*0.03), color: 0x3a4a6a, alpha:0.6 });
+    g.moveTo(-s*0.3, 0);
+    g.lineTo(-s*1.0, Math.sin(m.wingPhase*1.3)*s*0.15);
+
+  }
+
+  /* ---- SQUID ---- */
+  function spawnSquid(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Squid', 24);
+    return {
+      type:'squid',
+      x, y,
+      vx:0, vy:0,
+      targetX: x + rand(-400,400),
+      targetY: clamp(y + rand(-200,200), WORLD_TOP_MARGIN+60, 7500),
+      retarget: rand(200,350),
+      jetTimer: rand(80,180),
+      tentaclePhase: rand(0,Math.PI*2),
+      size: rand(16,24),
+      color: 0x8a9ab0,
+      g
+    };
+  }
+
+  function updateSquid(sq, dt){
+    sq.retarget -= dt;
+    sq.jetTimer -= dt;
+    if(sq.retarget <= 0){
+      sq.targetX = sq.x + rand(-450,450);
+      sq.targetY = clamp(sq.y + rand(-220,220), WORLD_TOP_MARGIN+60, 7500);
+      sq.retarget = rand(220,380);
+    }
+    if(sq.jetTimer <= 0){
+      const dx = sq.targetX-sq.x, dy = sq.targetY-sq.y, d = Math.hypot(dx,dy)||1;
+      sq.vx += (dx/d)*3.0;
+      sq.vy += (dy/d)*3.0;
+      sq.jetTimer = rand(90,170);
+    }
+    sq.vx *= Math.pow(0.88, dt);
+    sq.vy *= Math.pow(0.88, dt);
+    sq.x += sq.vx*dt; sq.y += sq.vy*dt;
+    sq.tentaclePhase += 0.1*dt;
+
+    sq.g.x = sq.x; sq.g.y = sq.y;
+    redrawSquid(sq);
+  }
+
+  function redrawSquid(sq){
+    const g = sq.g;
+    g.clear();
+    const s = sq.size;
+
+    g.lineStyle({ width: Math.max(1.4, s*0.08), color: sq.color, ...ROUND });
+    g.drawEllipse(0, -s*0.2, s*0.55, s*0.7);
+
+    for(let i=0;i<8;i++){
+      const tx = lerp(-s*0.4, s*0.4, i/7);
+      g.lineStyle({ width: Math.max(0.8, s*0.04), color: sq.color, alpha:0.7 });
+      g.moveTo(tx, s*0.3);
+      for(let seg=1; seg<=4; seg++){
+        const t = seg/4;
+        const wob = Math.sin(sq.tentaclePhase + i*0.5 + seg)*s*0.2;
+        g.lineTo(tx + wob, s*0.3 + seg*s*0.5);
+      }
+    }
+
+  }
+
+  /* ---- ANGLERFISH ---- */
+  function spawnAnglerfish(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Anglerfish', 28);
+    return {
+      type:'anglerfish',
+      x, y,
+      vx: rand(-0.5,0.5), vy: rand(-0.3,0.3),
+      targetX: x + rand(-200,200),
+      targetY: clamp(y + rand(-100,100), 4000, 7500),
+      retarget: rand(250,450),
+      angle:0, displayAngle:0,
+      lurePhase: rand(0,Math.PI*2),
+      size: rand(18,26),
+      g
+    };
+  }
+
+  function updateAnglerfish(a, dt){
+    a.retarget -= dt;
+    if(a.retarget <= 0){
+      a.targetX = a.x + rand(-250,250);
+      a.targetY = clamp(a.y + rand(-120,120), 4000, 7500);
+      a.retarget = rand(280,500);
+    }
+    const dx = a.targetX-a.x, dy = a.targetY-a.y, d = Math.hypot(dx,dy)||1;
+    a.vx = lerp(a.vx, (dx/d)*0.5, 0.008*dt);
+    a.vy = lerp(a.vy, (dy/d)*0.5, 0.008*dt);
+    a.x += a.vx*dt; a.y += a.vy*dt;
+    a.angle = Math.atan2(a.vy, a.vx);
+    a.displayAngle = lerpAngle(a.displayAngle, a.angle, 0.025*dt);
+    a.lurePhase += 0.06*dt;
+
+    a.g.x = a.x; a.g.y = a.y; orient(a.g, a.displayAngle);
+    redrawAnglerfish(a);
+  }
+
+  function redrawAnglerfish(a){
+    const g = a.g;
+    g.clear();
+    const s = a.size;
+
+    g.lineStyle({ width: Math.max(1.8, s*0.12), color: 0x3a2a1a, ...ROUND });
+    g.drawEllipse(0, 0, s, s*0.75);
+
+    g.lineStyle({ width: Math.max(1, s*0.06), color: 0x5a4a3a, ...ROUND });
+    g.moveTo(s*0.3, -s*0.5);
+    g.quadraticCurveTo(s*0.6, -s*1.2, s*0.4, -s*1.5);
+
+    g.beginFill(0x88ff44, 0.9);
+    g.drawCircle(s*0.4, -s*1.5, Math.max(2, s*0.1));
+    g.endFill();
+
+    g.lineStyle(1.2, 0x88ff44, 0.5);
+    g.drawCircle(s*0.4, -s*1.5, Math.max(3, s*0.18));
+
+  }
+
+  /* ---- NARWHAL ---- */
+  function spawnNarwhal(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Narwhal', 45);
+    return {
+      type:'narwhal',
+      x, y,
+      vx: rand(-1,1)||0.8, vy:0,
+      targetX: x + rand(-600,600),
+      targetY: clamp(y + rand(-150,150), WORLD_TOP_MARGIN+60, 3000),
+      retarget: rand(300,500),
+      angle:0, displayAngle:0,
+      tailPhase: rand(0,Math.PI*2),
+      size: rand(35,48),
+      g
+    };
+  }
+
+  function updateNarwhal(n, dt){
+    n.retarget -= dt;
+    if(n.retarget <= 0){
+      n.targetX = n.x + rand(-700,700);
+      n.targetY = clamp(n.y + rand(-180,180), WORLD_TOP_MARGIN+60, 3000);
+      n.retarget = rand(350,550);
+    }
+    const dx = n.targetX-n.x, dy = n.targetY-n.y, d = Math.hypot(dx,dy)||1;
+    n.vx = lerp(n.vx, (dx/d)*1.4, 0.008*dt);
+    n.vy = lerp(n.vy, (dy/d)*1.4, 0.008*dt);
+    n.x += n.vx*dt; n.y += n.vy*dt;
+    n.angle = Math.atan2(n.vy, n.vx);
+    n.displayAngle = lerpAngle(n.displayAngle, n.angle, 0.02*dt);
+    n.tailPhase += 0.08*dt;
+
+    n.g.x = n.x; n.g.y = n.y; orient(n.g, n.displayAngle);
+    redrawNarwhal(n);
+  }
+
+  function redrawNarwhal(n){
+    const g = n.g;
+    g.clear();
+    const s = n.size;
+
+    g.lineStyle({ width: Math.max(2, s*0.08), color: 0xc8d8e8, ...ROUND });
+    g.drawEllipse(0, 0, s*0.9, s*0.55);
+
+    g.lineStyle({ width: Math.max(1.5, s*0.06), color: 0xa8b8c8, ...ROUND });
+    g.moveTo(s*0.7, -s*0.1);
+    g.lineTo(s*1.8, -s*0.25);
+    g.lineTo(s*1.85, -s*0.15);
+    g.lineTo(s*0.75, s*0.05);
+
+    const tailWag = Math.sin(n.tailPhase)*s*0.15;
+    g.moveTo(-s*0.8, 0);
+    g.lineTo(-s*1.4, -s*0.25 + tailWag);
+    g.lineTo(-s*1.5, s*0.05 + tailWag);
+    g.lineTo(-s*0.85, s*0.15);
+
+  }
+
+  /* ---- HAMMERHEAD SHARK ---- */
+  function spawnHammerhead(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Hammerhead', 48);
+    return {
+      type:'hammerhead',
+      x, y,
+      vx: rand(-1,1)||1, vy:0,
+      targetX: x + rand(-700,700),
+      targetY: clamp(y + rand(-150,150), WORLD_TOP_MARGIN+80, 7500),
+      retarget: rand(280,480),
+      angle:0, displayAngle:0,
+      tailPhase: rand(0,Math.PI*2),
+      size: rand(38,52),
+      g
+    };
+  }
+
+  function updateHammerhead(h, dt){
+    h.retarget -= dt;
+    if(h.retarget <= 0){
+      h.targetX = h.x + rand(-800,800);
+      h.targetY = clamp(h.y + rand(-180,180), WORLD_TOP_MARGIN+80, 7500);
+      h.retarget = rand(320,520);
+    }
+    const dx = h.targetX-h.x, dy = h.targetY-h.y, d = Math.hypot(dx,dy)||1;
+    h.vx = lerp(h.vx, (dx/d)*1.6, 0.007*dt);
+    h.vy = lerp(h.vy, (dy/d)*1.6, 0.007*dt);
+    h.x += h.vx*dt; h.y += h.vy*dt;
+    h.angle = Math.atan2(h.vy, h.vx);
+    h.displayAngle = lerpAngle(h.displayAngle, h.angle, 0.025*dt);
+    h.tailPhase += 0.09*dt;
+
+    h.g.x = h.x; h.g.y = h.y; orient(h.g, h.displayAngle);
+    redrawHammerhead(h);
+  }
+
+  function redrawHammerhead(h){
+    const g = h.g;
+    g.clear();
+    const s = h.size;
+
+    g.lineStyle({ width: Math.max(2, s*0.08), color: 0x8a9aaa, ...ROUND });
+    g.drawEllipse(0, 0, s*0.85, s*0.5);
+
+    g.lineStyle({ width: Math.max(1.5, s*0.06), color: 0x8a9aaa, ...ROUND });
+    g.moveTo(s*0.5, -s*0.2);
+    g.lineTo(s*0.6, -s*0.55);
+    g.lineTo(s*0.4, -s*0.6);
+    g.lineTo(s*0.3, -s*0.25);
+
+    g.moveTo(s*0.5, s*0.2);
+    g.lineTo(s*0.6, s*0.55);
+    g.lineTo(s*0.4, s*0.6);
+    g.lineTo(s*0.3, s*0.25);
+
+    const tailWag = Math.sin(h.tailPhase)*s*0.12;
+    g.moveTo(-s*0.7, 0);
+    g.lineTo(-s*1.3, -s*0.2 + tailWag);
+    g.lineTo(-s*1.4, s*0.1 + tailWag);
+    g.lineTo(-s*0.75, s*0.15);
+
+  }
+
+  /* ---- GIANT ISOPOD ---- */
+  function spawnIsopod(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Giant Isopod', 22);
+    return {
+      type:'isopod',
+      x, y: floorY(x) - 20,
+      dir: Math.random()<0.5 ? -1 : 1,
+      walkPhase: rand(0,Math.PI*2),
+      size: rand(14,20),
+      color: 0x6a5a4a,
+      g
+    };
+  }
+
+  function updateIsopod(i, dt){
+    i.walkPhase += 0.2*dt;
+    i.x += i.dir * 0.3 * dt;
+    i.y = floorY(i.x) - i.size*0.4;
+    i.g.x = i.x; i.g.y = i.y;
+    i.g.scale.x = i.dir < 0 ? -1 : 1;
+    redrawIsopod(i);
+  }
+
+  function redrawIsopod(i){
+    const g = i.g;
+    g.clear();
+    const s = i.size;
+
+    g.lineStyle({ width: Math.max(1.6, s*0.14), color: i.color, ...ROUND });
+    g.drawEllipse(0, 0, s*0.9, s*0.65);
+
+    for(let seg=0; seg<5; seg++){
+      const sx = lerp(-s*0.7, s*0.7, seg/4);
+      g.lineStyle({ width: Math.max(1, s*0.08), color: i.color, alpha:0.7 });
+      g.moveTo(sx, -s*0.5);
+      g.lineTo(sx + Math.sin(i.walkPhase + seg)*s*0.15, -s*0.9);
+      g.moveTo(sx, s*0.5);
+      g.lineTo(sx + Math.sin(i.walkPhase + seg + Math.PI)*s*0.15, s*0.9);
+    }
+
+  }
+
+  /* ---- LIONFISH ---- */
+  function spawnLionfish(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Lionfish', 22);
+    return {
+      type:'lionfish',
+      x, y,
+      vx: rand(-0.6,0.6), vy: rand(-0.4,0.4),
+      targetX: x + rand(-250,250),
+      targetY: clamp(y + rand(-120,120), WORLD_TOP_MARGIN+60, 7500),
+      retarget: rand(180,320),
+      angle:0, displayAngle:0,
+      finPhase: rand(0,Math.PI*2),
+      size: rand(14,20),
+      g
+    };
+  }
+
+  function updateLionfish(lf, dt){
+    lf.retarget -= dt;
+    if(lf.retarget <= 0){
+      lf.targetX = lf.x + rand(-280,280);
+      lf.targetY = clamp(lf.y + rand(-140,140), WORLD_TOP_MARGIN+60, 7500);
+      lf.retarget = rand(200,350);
+    }
+    const dx = lf.targetX-lf.x, dy = lf.targetY-lf.y, d = Math.hypot(dx,dy)||1;
+    lf.vx = lerp(lf.vx, (dx/d)*0.6, 0.015*dt);
+    lf.vy = lerp(lf.vy, (dy/d)*0.6, 0.015*dt);
+    lf.x += lf.vx*dt; lf.y += lf.vy*dt;
+    lf.angle = Math.atan2(lf.vy, lf.vx);
+    lf.displayAngle = lerpAngle(lf.displayAngle, lf.angle, 0.03*dt);
+    lf.finPhase += 0.08*dt;
+
+    lf.g.x = lf.x; lf.g.y = lf.y; orient(lf.g, lf.displayAngle);
+    redrawLionfish(lf);
+  }
+
+  function redrawLionfish(lf){
+    const g = lf.g;
+    g.clear();
+    const s = lf.size;
+
+    g.lineStyle({ width: Math.max(1.6, s*0.12), color: 0xff6b6b, ...ROUND });
+    g.drawEllipse(0, 0, s*0.8, s*0.5);
+
+    for(let i=0;i<6;i++){
+      const fy = lerp(-s*0.4, s*0.4, i/5);
+      const fan = Math.sin(lf.finPhase + i*0.8)*s*0.25;
+      g.lineStyle({ width: Math.max(0.8, s*0.06), color: 0xff8f8f, alpha:0.8 });
+      g.moveTo(-s*0.3, fy);
+      g.lineTo(-s*0.8, fy - s*0.4 + fan);
+      g.lineTo(-s*0.5, fy - s*0.6 + fan);
+      g.lineTo(-s*0.1, fy - s*0.1);
+    }
+
+  }
+
+  /* ---- CUTTLEFISH ---- */
+  function spawnCuttlefish(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Cuttlefish', 22);
+    return {
+      type:'cuttlefish',
+      x, y,
+      vx:0, vy:0,
+      targetX: x + rand(-350,350),
+      targetY: clamp(y + rand(-180,180), WORLD_TOP_MARGIN+60, 7500),
+      retarget: rand(200,380),
+      finPhase: rand(0,Math.PI*2),
+      size: rand(16,24),
+      color: 0xffa06b,
+      g
+    };
+  }
+
+  function updateCuttlefish(c, dt){
+    c.retarget -= dt;
+    if(c.retarget <= 0){
+      c.targetX = c.x + rand(-400,400);
+      c.targetY = clamp(c.y + rand(-200,200), WORLD_TOP_MARGIN+60, 7500);
+      c.retarget = rand(240,420);
+    }
+    const dx = c.targetX-c.x, dy = c.targetY-c.y, d = Math.hypot(dx,dy)||1;
+    c.vx = lerp(c.vx, (dx/d)*0.9, 0.012*dt);
+    c.vy = lerp(c.vy, (dy/d)*0.9, 0.012*dt);
+    c.x += c.vx*dt; c.y += c.vy*dt;
+    c.finPhase += 0.1*dt;
+
+    c.g.x = c.x; c.g.y = c.y;
+    redrawCuttlefish(c);
+  }
+
+  function redrawCuttlefish(c){
+    const g = c.g;
+    g.clear();
+    const s = c.size;
+
+    g.lineStyle({ width: Math.max(1.6, s*0.1), color: c.color, ...ROUND });
+    g.drawEllipse(0, 0, s*0.75, s*0.55);
+
+    const finWave = Math.sin(c.finPhase)*s*0.15;
+    g.lineStyle({ width: Math.max(1, s*0.06), color: 0xffc08f, alpha:0.8 });
+    g.moveTo(-s*0.5, -s*0.4);
+    g.quadraticCurveTo(-s*0.3, -s*0.7+finWave, s*0.1, -s*0.45);
+    g.moveTo(-s*0.5, s*0.4);
+    g.quadraticCurveTo(-s*0.3, s*0.7-finWave, s*0.1, s*0.45);
+
+    for(let i=0;i<6;i++){
+      const tx = lerp(-s*0.3, s*0.4, i/5);
+      g.lineStyle({ width: Math.max(0.8, s*0.04), color: c.color, alpha:0.7 });
+      g.moveTo(tx, s*0.3);
+      g.lineTo(tx + Math.sin(c.finPhase + i)*s*0.15, s*0.8);
+    }
+
+  }
+
+  /* ---- PARROTFISH ---- */
+  function spawnParrotfish(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Parrotfish', 20);
+    return {
+      type:'parrotfish',
+      x, y,
+      vx: rand(-1,1)||0.7, vy: rand(-0.3,0.3),
+      targetX: x + rand(-350,350),
+      targetY: clamp(y + rand(-150,150), WORLD_TOP_MARGIN+60, 7500),
+      retarget: rand(200,380),
+      angle:0, displayAngle:0,
+      tailPhase: rand(0,Math.PI*2),
+      size: rand(16,24),
+      color: 0x4ecdc4,
+      g
+    };
+  }
+
+  function updateParrotfish(pf, dt){
+    pf.retarget -= dt;
+    if(pf.retarget <= 0){
+      pf.targetX = pf.x + rand(-400,400);
+      pf.targetY = clamp(pf.y + rand(-180,180), WORLD_TOP_MARGIN+60, 7500);
+      pf.retarget = rand(240,420);
+    }
+    const dx = pf.targetX-pf.x, dy = pf.targetY-pf.y, d = Math.hypot(dx,dy)||1;
+    pf.vx = lerp(pf.vx, (dx/d)*1.0, 0.012*dt);
+    pf.vy = lerp(pf.vy, (dy/d)*1.0, 0.012*dt);
+    pf.x += pf.vx*dt; pf.y += pf.vy*dt;
+    pf.angle = Math.atan2(pf.vy, pf.vx);
+    pf.displayAngle = lerpAngle(pf.displayAngle, pf.angle, 0.03*dt);
+    pf.tailPhase += 0.12*dt;
+
+    pf.g.x = pf.x; pf.g.y = pf.y; orient(pf.g, pf.displayAngle);
+    redrawParrotfish(pf);
+  }
+
+  function redrawParrotfish(pf){
+    const g = pf.g;
+    g.clear();
+    const s = pf.size;
+
+    g.lineStyle({ width: Math.max(1.6, s*0.1), color: pf.color, ...ROUND });
+    g.drawEllipse(0, 0, s*0.9, s*0.5);
+
+    g.lineStyle({ width: Math.max(1.2, s*0.07), color: 0x7fe8d4, ...ROUND });
+    g.moveTo(s*0.5, -s*0.15);
+    g.lineTo(s*0.9, -s*0.35);
+    g.lineTo(s*0.85, -s*0.05);
+
+    const tailWag = Math.sin(pf.tailPhase)*s*0.2;
+    g.moveTo(-s*0.7, 0);
+    g.lineTo(-s*1.2, -s*0.25 + tailWag);
+    g.lineTo(-s*1.3, s*0.05 + tailWag);
+    g.lineTo(-s*0.75, s*0.15);
+
+  }
+
+  /* ---- BLOBFISH ---- */
+  function spawnBlobfish(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Blobfish', 20);
+    return {
+      type:'blobfish',
+      x, y,
+      vx:0, vy:0,
+      targetX: x + rand(-150,150),
+      targetY: clamp(y + rand(-80,80), 5000, 7500),
+      retarget: rand(300,500),
+      phase: rand(0,Math.PI*2),
+      size: rand(14,20),
+      g
+    };
+  }
+
+  function updateBlobfish(b, dt){
+    b.retarget -= dt;
+    if(b.retarget <= 0){
+      b.targetX = b.x + rand(-180,180);
+      b.targetY = clamp(b.y + rand(-100,100), 5000, 7500);
+      b.retarget = rand(350,550);
+    }
+    const dx = b.targetX-b.x, dy = b.targetY-b.y, d = Math.hypot(dx,dy)||1;
+    b.vx = lerp(b.vx, (dx/d)*0.3, 0.005*dt);
+    b.vy = lerp(b.vy, (dy/d)*0.3, 0.005*dt);
+    b.x += b.vx*dt; b.y += b.vy*dt;
+    b.phase += 0.03*dt;
+
+    b.g.x = b.x; b.g.y = b.y;
+    redrawBlobfish(b);
+  }
+
+  function redrawBlobfish(b){
+    const g = b.g;
+    g.clear();
+    const s = b.size;
+    const squish = 1 + Math.sin(b.phase)*0.08;
+
+    g.lineStyle({ width: Math.max(1.6, s*0.12), color: 0xffb8b8, ...ROUND });
+    g.drawEllipse(0, 0, s*0.7*squish, s*0.85);
+
+    g.lineStyle({ width: Math.max(1, s*0.06), color: 0xffc8c8, alpha:0.6 });
+    g.moveTo(-s*0.3, -s*0.5);
+    g.lineTo(-s*0.5, -s*0.8);
+    g.lineTo(-s*0.1, -s*0.6);
+    g.moveTo(s*0.3, -s*0.5);
+    g.lineTo(s*0.5, -s*0.8);
+    g.lineTo(s*0.1, -s*0.6);
+
+
+    g.lineStyle(1, 0xff9090);
+    g.moveTo(-s*0.1, s*0.1);
+    g.quadraticCurveTo(0, s*0.2, s*0.1, s*0.1);
+  }
+
+  /* ---- SEA DRAGON ---- */
+  function spawnSeaDragon(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Sea Dragon', 22);
+    return {
+      type:'seadragon',
+      x, y,
+      vx: rand(-0.4,0.4), vy: rand(-0.2,0.2),
+      targetX: x + rand(-200,200),
+      targetY: clamp(y + rand(-100,100), WORLD_TOP_MARGIN+60, 7500),
+      retarget: rand(250,450),
+      phase: rand(0,Math.PI*2),
+      size: rand(14,20),
+      g
+    };
+  }
+
+  function updateSeaDragon(sd, dt){
+    sd.retarget -= dt;
+    if(sd.retarget <= 0){
+      sd.targetX = sd.x + rand(-250,250);
+      sd.targetY = clamp(sd.y + rand(-120,120), WORLD_TOP_MARGIN+60, 7500);
+      sd.retarget = rand(280,500);
+    }
+    const dx = sd.targetX-sd.x, dy = sd.targetY-sd.y, d = Math.hypot(dx,dy)||1;
+    sd.vx = lerp(sd.vx, (dx/d)*0.5, 0.008*dt);
+    sd.vy = lerp(sd.vy, (dy/d)*0.5, 0.008*dt);
+    sd.x += sd.vx*dt; sd.y += sd.vy*dt;
+    sd.phase += 0.05*dt;
+
+    sd.g.x = sd.x; sd.g.y = sd.y;
+    redrawSeaDragon(sd);
+  }
+
+  function redrawSeaDragon(sd){
+    const g = sd.g;
+    g.clear();
+    const s = sd.size;
+
+    g.lineStyle({ width: Math.max(1.4, s*0.1), color: 0xffd700, ...ROUND });
+    g.drawEllipse(0, 0, s*0.5, s*0.7);
+
+    for(let i=0;i<4;i++){
+      const fy = lerp(-s*0.5, s*0.5, i/3);
+      const finSway = Math.sin(sd.phase + i)*s*0.2;
+      g.lineStyle({ width: Math.max(0.8, s*0.05), color: 0xffe44d, alpha:0.7 });
+      g.moveTo(-s*0.3, fy);
+      g.lineTo(-s*0.6, fy - s*0.3 + finSway);
+      g.lineTo(-s*0.4, fy - s*0.5 + finSway);
+      g.lineTo(-s*0.1, fy - s*0.1);
+    }
+
+  }
+
+  /* ---- WHALE ---- */
+  function spawnWhale(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Whale', 55);
+    return {
+      type:'whale',
+      x, y,
+      vx: rand(-0.6,0.6), vy: rand(-0.2,0.2),
+      targetX: x + rand(-800,800),
+      targetY: clamp(y + rand(-200,200), WORLD_TOP_MARGIN+80, 5000),
+      retarget: rand(400,600),
+      angle:0, displayAngle:0,
+      tailPhase: rand(0,Math.PI*2),
+      spoutTimer: rand(200,400),
+      size: rand(55,75),
+      g
+    };
+  }
+
+  function updateWhale(w, dt){
+    w.retarget -= dt;
+    w.spoutTimer -= dt;
+    if(w.retarget <= 0){
+      w.targetX = w.x + rand(-900,900);
+      w.targetY = clamp(w.y + rand(-250,250), WORLD_TOP_MARGIN+80, 5000);
+      w.retarget = rand(450,650);
+    }
+    const dx = w.targetX-w.x, dy = w.targetY-w.y, d = Math.hypot(dx,dy)||1;
+    w.vx = lerp(w.vx, (dx/d)*0.6, 0.004*dt);
+    w.vy = lerp(w.vy, (dy/d)*0.6, 0.004*dt);
+    w.x += w.vx*dt; w.y += w.vy*dt;
+    w.angle = Math.atan2(w.vy, w.vx);
+    w.displayAngle = lerpAngle(w.displayAngle, w.angle, 0.012*dt);
+    w.tailPhase += 0.04*dt;
+
+    w.g.x = w.x; w.g.y = w.y; orient(w.g, w.displayAngle);
+    redrawWhale(w);
+  }
+
+  function redrawWhale(w){
+    const g = w.g;
+    g.clear();
+    const s = w.size;
+
+    g.lineStyle({ width: Math.max(2.5, s*0.06), color: 0x4a6a8a, ...ROUND });
+    g.drawEllipse(0, 0, s, s*0.55);
+
+    g.lineStyle({ width: Math.max(1.5, s*0.04), color: 0x5a7a9a, ...ROUND });
+    g.moveTo(s*0.6, -s*0.35);
+    g.quadraticCurveTo(s*0.8, -s*0.6, s*0.4, -s*0.5);
+
+    const tailWag = Math.sin(w.tailPhase)*s*0.2;
+    g.moveTo(-s*0.9, 0);
+    g.lineTo(-s*1.5, -s*0.35 + tailWag);
+    g.lineTo(-s*1.6, s*0.1 + tailWag);
+    g.lineTo(-s*0.95, s*0.2);
+
+    g.lineStyle({ width: Math.max(1.5, s*0.04), color: 0x5a7a9a, ...ROUND });
+    g.moveTo(s*0.3, -s*0.15);
+    g.lineTo(s*0.5, -s*0.45);
+    g.lineTo(s*0.35, -s*0.35);
+    g.moveTo(s*0.3, s*0.15);
+    g.lineTo(s*0.5, s*0.45);
+    g.lineTo(s*0.35, s*0.35);
+
+  }
+
+  /* ---- DOLPHIN ---- */
+  function spawnDolphin(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Dolphin', 32);
+    return {
+      type:'dolphin',
+      x, y,
+      vx: rand(-1.2,1.2), vy: rand(-0.5,0.5),
+      targetX: x + rand(-500,500),
+      targetY: clamp(y + rand(-200,200), WORLD_TOP_MARGIN+60, 4000),
+      retarget: rand(200,380),
+      angle:0, displayAngle:0,
+      tailPhase: rand(0,Math.PI*2),
+      jumpTimer: rand(300,600),
+      size: rand(22,30),
+      g
+    };
+  }
+
+  function updateDolphin(d, dt){
+    d.retarget -= dt;
+    d.jumpTimer -= dt;
+    if(d.retarget <= 0){
+      d.targetX = d.x + rand(-600,600);
+      d.targetY = clamp(d.y + rand(-250,250), WORLD_TOP_MARGIN+60, 4000);
+      d.retarget = rand(250,420);
+    }
+    const dx = d.targetX-d.x, dy = d.targetY-d.y, dmag = Math.hypot(dx,dy)||1;
+    d.vx = lerp(d.vx, (dx/dmag)*1.6, 0.012*dt);
+    d.vy = lerp(d.vy, (dy/dmag)*1.6, 0.012*dt);
+    d.x += d.vx*dt; d.y += d.vy*dt;
+    d.angle = Math.atan2(d.vy, d.vx);
+    d.displayAngle = lerpAngle(d.displayAngle, d.angle, 0.04*dt);
+    d.tailPhase += 0.14*dt;
+
+    d.g.x = d.x; d.g.y = d.y; orient(d.g, d.displayAngle);
+    redrawDolphin(d);
+  }
+
+  function redrawDolphin(d){
+    const g = d.g;
+    g.clear();
+    const s = d.size;
+
+    g.lineStyle({ width: Math.max(1.8, s*0.1), color: 0x7a8a9a, ...ROUND });
+    g.drawEllipse(0, 0, s*0.9, s*0.45);
+
+    g.lineStyle({ width: Math.max(1.2, s*0.06), color: 0x8a9aaa, ...ROUND });
+    g.moveTo(s*0.4, -s*0.1);
+    g.lineTo(s*0.65, -s*0.45);
+    g.lineTo(s*0.5, -s*0.35);
+
+    const tailWag = Math.sin(d.tailPhase)*s*0.2;
+    g.moveTo(-s*0.75, 0);
+    g.lineTo(-s*1.3, -s*0.3 + tailWag);
+    g.lineTo(-s*1.4, s*0.08 + tailWag);
+    g.lineTo(-s*0.8, s*0.15);
+
+  }
+
+  /* ---- SWORDFISH ---- */
+  function spawnSwordfish(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Swordfish', 36);
+    return {
+      type:'swordfish',
+      x, y,
+      vx: rand(-1.5,1.5), vy: rand(-0.4,0.4),
+      targetX: x + rand(-700,700),
+      targetY: clamp(y + rand(-200,200), WORLD_TOP_MARGIN+80, 6000),
+      retarget: rand(180,320),
+      angle:0, displayAngle:0,
+      tailPhase: rand(0,Math.PI*2),
+      size: rand(28,38),
+      g
+    };
+  }
+
+  function updateSwordfish(sf, dt){
+    sf.retarget -= dt;
+    if(sf.retarget <= 0){
+      sf.targetX = sf.x + rand(-800,800);
+      sf.targetY = clamp(sf.y + rand(-250,250), WORLD_TOP_MARGIN+80, 6000);
+      sf.retarget = rand(220,380);
+    }
+    const dx = sf.targetX-sf.x, dy = sf.targetY-sf.y, d = Math.hypot(dx,dy)||1;
+    sf.vx = lerp(sf.vx, (dx/d)*2.2, 0.015*dt);
+    sf.vy = lerp(sf.vy, (dy/d)*2.2, 0.015*dt);
+    sf.x += sf.vx*dt; sf.y += sf.vy*dt;
+    sf.angle = Math.atan2(sf.vy, sf.vx);
+    sf.displayAngle = lerpAngle(sf.displayAngle, sf.angle, 0.035*dt);
+    sf.tailPhase += 0.16*dt;
+
+    sf.g.x = sf.x; sf.g.y = sf.y; orient(sf.g, sf.displayAngle);
+    redrawSwordfish(sf);
+  }
+
+  function redrawSwordfish(sf){
+    const g = sf.g;
+    g.clear();
+    const s = sf.size;
+
+    g.lineStyle({ width: Math.max(2, s*0.08), color: 0x5a6a8a, ...ROUND });
+    g.drawEllipse(0, 0, s*0.85, s*0.4);
+
+    g.lineStyle({ width: Math.max(1.5, s*0.05), color: 0x7a8aaa, ...ROUND });
+    g.moveTo(s*0.6, -s*0.05);
+    g.lineTo(s*2.0, -s*0.02);
+    g.lineTo(s*2.05, s*0.02);
+    g.lineTo(s*0.6, s*0.05);
+
+    const tailWag = Math.sin(sf.tailPhase)*s*0.18;
+    g.moveTo(-s*0.7, 0);
+    g.lineTo(-s*1.3, -s*0.25 + tailWag);
+    g.lineTo(-s*1.4, s*0.08 + tailWag);
+    g.lineTo(-s*0.75, s*0.12);
+
+  }
+
+  /* ---- NAUTILUS ---- */
+  function spawnNautilus(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Nautilus', 22);
+    return {
+      type:'nautilus',
+      x, y,
+      vx: rand(-0.3,0.3), vy: rand(-0.15,0.15),
+      targetX: x + rand(-200,200),
+      targetY: clamp(y + rand(-100,100), WORLD_TOP_MARGIN+80, 7500),
+      retarget: rand(300,500),
+      angle:0, displayAngle:0,
+      shellPhase: rand(0,Math.PI*2),
+      size: rand(14,20),
+      g
+    };
+  }
+
+  function updateNautilus(n, dt){
+    n.retarget -= dt;
+    if(n.retarget <= 0){
+      n.targetX = n.x + rand(-250,250);
+      n.targetY = clamp(n.y + rand(-120,120), WORLD_TOP_MARGIN+80, 7500);
+      n.retarget = rand(350,550);
+    }
+    const dx = n.targetX-n.x, dy = n.targetY-n.y, d = Math.hypot(dx,dy)||1;
+    n.vx = lerp(n.vx, (dx/d)*0.4, 0.008*dt);
+    n.vy = lerp(n.vy, (dy/d)*0.4, 0.008*dt);
+    n.x += n.vx*dt; n.y += n.vy*dt;
+    n.angle = Math.atan2(n.vy, n.vx);
+    n.displayAngle = lerpAngle(n.displayAngle, n.angle, 0.02*dt);
+    n.shellPhase += 0.06*dt;
+
+    n.g.x = n.x; n.g.y = n.y; orient(n.g, n.displayAngle);
+    redrawNautilus(n);
+  }
+
+  function redrawNautilus(n){
+    const g = n.g;
+    g.clear();
+    const s = n.size;
+
+    g.lineStyle({ width: Math.max(1.6, s*0.12), color: 0xc8a882, ...ROUND });
+    g.drawCircle(0, 0, s*0.7);
+
+    for(let i=1;i<=3;i++){
+      g.lineStyle({ width: Math.max(1, s*0.06), color: 0xd8b892, alpha:0.7 });
+      g.drawCircle(0, 0, s*0.7 * (i/3));
+    }
+
+    const tentSway = Math.sin(n.shellPhase)*s*0.15;
+    g.lineStyle({ width: Math.max(0.8, s*0.05), color: 0xb89872, alpha:0.8 });
+    g.moveTo(-s*0.4, 0);
+    g.lineTo(-s*0.7, -s*0.3 + tentSway);
+    g.lineTo(-s*0.6, s*0.1 + tentSway);
+    g.lineTo(-s*0.35, s*0.05);
+
+  }
+
+  /* ---- SEA SNAKE ---- */
+  function spawnSeaSnake(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Sea Snake', 24);
+    return {
+      type:'seasnake',
+      x, y,
+      vx: rand(-0.8,0.8), vy: rand(-0.3,0.3),
+      targetX: x + rand(-400,400),
+      targetY: clamp(y + rand(-150,150), WORLD_TOP_MARGIN+80, 7500),
+      retarget: rand(250,420),
+      phase: rand(0,Math.PI*2),
+      size: rand(16,24),
+      g
+    };
+  }
+
+  function updateSeaSnake(sn, dt){
+    sn.retarget -= dt;
+    if(sn.retarget <= 0){
+      sn.targetX = sn.x + rand(-500,500);
+      sn.targetY = clamp(sn.y + rand(-180,180), WORLD_TOP_MARGIN+80, 7500);
+      sn.retarget = rand(280,480);
+    }
+    const dx = sn.targetX-sn.x, dy = sn.targetY-sn.y, d = Math.hypot(dx,dy)||1;
+    sn.vx = lerp(sn.vx, (dx/d)*0.9, 0.01*dt);
+    sn.vy = lerp(sn.vy, (dy/d)*0.9, 0.01*dt);
+    sn.x += sn.vx*dt; sn.y += sn.vy*dt;
+    sn.phase += 0.08*dt;
+
+    sn.g.x = sn.x; sn.g.y = sn.y;
+    redrawSeaSnake(sn);
+  }
+
+  function redrawSeaSnake(sn){
+    const g = sn.g;
+    g.clear();
+    const s = sn.size;
+
+    g.lineStyle({ width: Math.max(1.6, s*0.1), color: 0x5a8a5a, ...ROUND });
+    for(let seg=0; seg<8; seg++){
+      const t = seg/7;
+      const sx = lerp(-s*1.2, s*1.2, t);
+      const sy = Math.sin(sn.phase + seg*0.9)*s*0.25;
+      if(seg===0) g.moveTo(sx, sy);
+      else g.lineTo(sx, sy);
+    }
+
+    for(let i=0;i<3;i++){
+      const bx = lerp(-s*0.8, s*0.8, i/2);
+      const by = Math.sin(sn.phase + i*1.2)*s*0.25;
+      g.lineStyle({ width: Math.max(0.8, s*0.05), color: 0xffd700, alpha:0.8 });
+      g.moveTo(bx, by);
+      g.lineTo(bx + s*0.15, by - s*0.25);
+    }
+
+  }
+
+  /* ---- SUNFISH ---- */
+  function spawnSunfish(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Sunfish', 45);
+    return {
+      type:'sunfish',
+      x, y,
+      vx: rand(-0.5,0.5), vy: rand(-0.3,0.3),
+      targetX: x + rand(-500,500),
+      targetY: clamp(y + rand(-200,200), WORLD_TOP_MARGIN+80, 5000),
+      retarget: rand(300,500),
+      angle:0, displayAngle:0,
+      finPhase: rand(0,Math.PI*2),
+      size: rand(35,48),
+      g
+    };
+  }
+
+  function updateSunfish(sf, dt){
+    sf.retarget -= dt;
+    if(sf.retarget <= 0){
+      sf.targetX = sf.x + rand(-600,600);
+      sf.targetY = clamp(sf.y + rand(-250,250), WORLD_TOP_MARGIN+80, 5000);
+      sf.retarget = rand(350,550);
+    }
+    const dx = sf.targetX-sf.x, dy = sf.targetY-sf.y, d = Math.hypot(dx,dy)||1;
+    sf.vx = lerp(sf.vx, (dx/d)*0.7, 0.006*dt);
+    sf.vy = lerp(sf.vy, (dy/d)*0.7, 0.006*dt);
+    sf.x += sf.vx*dt; sf.y += sf.vy*dt;
+    sf.angle = Math.atan2(sf.vy, sf.vx);
+    sf.displayAngle = lerpAngle(sf.displayAngle, sf.angle, 0.015*dt);
+    sf.finPhase += 0.06*dt;
+
+    sf.g.x = sf.x; sf.g.y = sf.y; orient(sf.g, sf.displayAngle);
+    redrawSunfish(sf);
+  }
+
+  function redrawSunfish(sf){
+    const g = sf.g;
+    g.clear();
+    const s = sf.size;
+
+    g.lineStyle({ width: Math.max(2, s*0.06), color: 0x7a8a7a, ...ROUND });
+    g.drawEllipse(0, 0, s*0.7, s*0.9);
+
+    const finWave = Math.sin(sf.finPhase)*s*0.25;
+    g.lineStyle({ width: Math.max(1.5, s*0.05), color: 0x8a9a8a, ...ROUND });
+    g.moveTo(s*0.3, -s*0.5);
+    g.lineTo(s*0.6, -s*0.9 + finWave);
+    g.lineTo(s*0.2, -s*0.7 + finWave);
+    g.moveTo(s*0.3, s*0.5);
+    g.lineTo(s*0.6, s*0.9 - finWave);
+    g.lineTo(s*0.2, s*0.7 - finWave);
+
+    g.lineStyle({ width: Math.max(1, s*0.04), color: 0x6a7a6a, alpha:0.6 });
+    g.moveTo(-s*0.3, -s*0.3);
+    g.lineTo(s*0.3, 0);
+    g.lineTo(-s*0.3, s*0.3);
+
+  }
+
+  /* ---- DUMBO OCTOPUS ---- */
+  function spawnDumboOctopus(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Dumbo Octopus', 26);
+    return {
+      type:'dumbooctopus',
+      x, y,
+      vx:0, vy:0,
+      targetX: x + rand(-250,250),
+      targetY: clamp(y + rand(-120,120), 5000, 7500),
+      retarget: rand(250,420),
+      earPhase: rand(0,Math.PI*2),
+      size: rand(14,20),
+      color: 0xffa0b0,
+      g
+    };
+  }
+
+  function updateDumboOctopus(do_, dt){
+    do_.retarget -= dt;
+    if(do_.retarget <= 0){
+      do_.targetX = do_.x + rand(-300,300);
+      do_.targetY = clamp(do_.y + rand(-140,140), 5000, 7500);
+      do_.retarget = rand(280,480);
+    }
+    const dx = do_.targetX-do_.x, dy = do_.targetY-do_.y, d = Math.hypot(dx,dy)||1;
+    do_.vx = lerp(do_.vx, (dx/d)*0.5, 0.008*dt);
+    do_.vy = lerp(do_.vy, (dy/d)*0.5, 0.008*dt);
+    do_.x += do_.vx*dt; do_.y += do_.vy*dt;
+    do_.earPhase += 0.07*dt;
+
+    do_.g.x = do_.x; do_.g.y = do_.y;
+    redrawDumboOctopus(do_);
+  }
+
+  function redrawDumboOctopus(do_){
+    const g = do_.g;
+    g.clear();
+    const s = do_.size;
+
+    g.lineStyle({ width: Math.max(1.6, s*0.12), color: do_.color, ...ROUND });
+    g.drawEllipse(0, 0, s*0.6, s*0.5);
+
+    const earFlap = Math.sin(do_.earPhase)*s*0.15;
+    g.lineStyle({ width: Math.max(1.2, s*0.08), color: 0xffb8c8, alpha:0.8, ...ROUND });
+    g.moveTo(-s*0.3, -s*0.2);
+    g.quadraticCurveTo(-s*0.7, -s*0.5 + earFlap, -s*0.4, -s*0.1);
+    g.moveTo(s*0.3, -s*0.2);
+    g.quadraticCurveTo(s*0.7, -s*0.5 + earFlap, s*0.4, -s*0.1);
+
+    for(let i=0;i<6;i++){
+      const tx = lerp(-s*0.3, s*0.3, i/5);
+      g.lineStyle({ width: Math.max(0.8, s*0.05), color: do_.color, alpha:0.7 });
+      g.moveTo(tx, s*0.2);
+      g.lineTo(tx + Math.sin(do_.earPhase + i)*s*0.1, s*0.7);
+    }
+
+  }
+
+  /* ---- GOBLIN SHARK ---- */
+  function spawnGoblinShark(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Goblin Shark', 38);
+    return {
+      type:'goblinshark',
+      x, y,
+      vx: rand(-0.8,0.8), vy: rand(-0.3,0.3),
+      targetX: x + rand(-500,500),
+      targetY: clamp(y + rand(-150,150), 4000, 7500),
+      retarget: rand(300,500),
+      angle:0, displayAngle:0,
+      jawPhase: rand(0,Math.PI*2),
+      size: rand(28,38),
+      g
+    };
+  }
+
+  function updateGoblinShark(gs, dt){
+    gs.retarget -= dt;
+    if(gs.retarget <= 0){
+      gs.targetX = gs.x + rand(-600,600);
+      gs.targetY = clamp(gs.y + rand(-180,180), 4000, 7500);
+      gs.retarget = rand(350,550);
+    }
+    const dx = gs.targetX-gs.x, dy = gs.targetY-gs.y, d = Math.hypot(dx,dy)||1;
+    gs.vx = lerp(gs.vx, (dx/d)*1.0, 0.008*dt);
+    gs.vy = lerp(gs.vy, (dy/d)*1.0, 0.008*dt);
+    gs.x += gs.vx*dt; gs.y += gs.vy*dt;
+    gs.angle = Math.atan2(gs.vy, gs.vx);
+    gs.displayAngle = lerpAngle(gs.displayAngle, gs.angle, 0.02*dt);
+    gs.jawPhase += 0.05*dt;
+
+    gs.g.x = gs.x; gs.g.y = gs.y; orient(gs.g, gs.displayAngle);
+    redrawGoblinShark(gs);
+  }
+
+  function redrawGoblinShark(gs){
+    const g = gs.g;
+    g.clear();
+    const s = gs.size;
+    const jawOpen = Math.sin(gs.jawPhase)*s*0.15;
+
+    g.lineStyle({ width: Math.max(2, s*0.08), color: 0x9a8aaa, ...ROUND });
+    g.drawEllipse(0, 0, s*0.85, s*0.45);
+
+    g.lineStyle({ width: Math.max(1.5, s*0.06), color: 0xbaaaca, ...ROUND });
+    g.moveTo(s*0.5, -s*0.1);
+    g.lineTo(s*1.6, -s*0.05 + jawOpen*0.3);
+    g.lineTo(s*1.65, s*0.02 + jawOpen*0.3);
+    g.lineTo(s*0.5, s*0.1);
+
+    const tailWag = Math.sin(gs.jawPhase*0.8)*s*0.15;
+    g.moveTo(-s*0.7, 0);
+    g.lineTo(-s*1.3, -s*0.2 + tailWag);
+    g.lineTo(-s*1.4, s*0.08 + tailWag);
+    g.lineTo(-s*0.75, s*0.12);
+
+  }
+
+  /* ---- OARFISH ---- */
+  function spawnOarfish(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Oarfish', 30);
+    return {
+      type:'oarfish',
+      x, y,
+      vx: rand(-0.8,0.8), vy: rand(-0.3,0.3),
+      targetX: x + rand(-500,500),
+      targetY: clamp(y + rand(-200,200), WORLD_TOP_MARGIN+80, 7000),
+      retarget: rand(300,500),
+      phase: rand(0,Math.PI*2),
+      size: rand(20,30),
+      g
+    };
+  }
+
+  function updateOarfish(o, dt){
+    o.retarget -= dt;
+    if(o.retarget <= 0){
+      o.targetX = o.x + rand(-600,600);
+      o.targetY = clamp(o.y + rand(-250,250), WORLD_TOP_MARGIN+80, 7000);
+      o.retarget = rand(350,550);
+    }
+    const dx = o.targetX-o.x, dy = o.targetY-o.y, d = Math.hypot(dx,dy)||1;
+    o.vx = lerp(o.vx, (dx/d)*0.8, 0.006*dt);
+    o.vy = lerp(o.vy, (dy/d)*0.8, 0.006*dt);
+    o.x += o.vx*dt; o.y += o.vy*dt;
+    o.phase += 0.04*dt;
+
+    o.g.x = o.x; o.g.y = o.y;
+    redrawOarfish(o);
+  }
+
+  function redrawOarfish(o){
+    const g = o.g;
+    g.clear();
+    const s = o.size;
+
+    g.lineStyle({ width: Math.max(1.6, s*0.1), color: 0xffd700, ...ROUND });
+    g.drawEllipse(0, 0, s*0.4, s*0.6);
+
+    for(let seg=0; seg<6; seg++){
+      const sy = lerp(s*0.5, s*2.2, seg/5);
+      const sway = Math.sin(o.phase + seg*0.8)*s*0.15;
+      g.lineStyle({ width: Math.max(1, s*0.06), color: 0xffe44d, alpha:0.8 });
+      g.moveTo(0, sy - s*0.3);
+      g.lineTo(sway, sy);
+      g.lineTo(-sway*0.5, sy + s*0.2);
+    }
+
+    const crestSway = Math.sin(o.phase*2)*s*0.3;
+    g.lineStyle({ width: Math.max(1.2, s*0.08), color: 0xff4444, ...ROUND });
+    g.moveTo(0, -s*0.5);
+    g.lineTo(crestSway, -s*1.2);
+    g.lineTo(-crestSway*0.3, -s*0.9);
+    g.lineTo(0, -s*0.5);
+
+  }
+
+  /* ---- MANATEE ---- */
+  function spawnManatee(x,y){
+    const g = new PIXI.Graphics();
+    creaturesLayer.addChild(g);
+    attachHoverLabel(g, 'Manatee', 40);
+    return {
+      type:'manatee',
+      x, y,
+      vx: rand(-0.6,0.6), vy: rand(-0.2,0.2),
+      targetX: x + rand(-400,400),
+      targetY: clamp(y + rand(-150,150), WORLD_TOP_MARGIN+80, 4000),
+      retarget: rand(350,550),
+      angle:0, displayAngle:0,
+      tailPhase: rand(0,Math.PI*2),
+      size: rand(32,44),
+      g
+    };
+  }
+
+  function updateManatee(m, dt){
+    m.retarget -= dt;
+    if(m.retarget <= 0){
+      m.targetX = m.x + rand(-500,500);
+      m.targetY = clamp(m.y + rand(-180,180), WORLD_TOP_MARGIN+80, 4000);
+      m.retarget = rand(400,600);
+    }
+    const dx = m.targetX-m.x, dy = m.targetY-m.y, d = Math.hypot(dx,dy)||1;
+    m.vx = lerp(m.vx, (dx/d)*0.7, 0.005*dt);
+    m.vy = lerp(m.vy, (dy/d)*0.7, 0.005*dt);
+    m.x += m.vx*dt; m.y += m.vy*dt;
+    m.angle = Math.atan2(m.vy, m.vx);
+    m.displayAngle = lerpAngle(m.displayAngle, m.angle, 0.015*dt);
+    m.tailPhase += 0.05*dt;
+
+    m.g.x = m.x; m.g.y = m.y; orient(m.g, m.displayAngle);
+    redrawManatee(m);
+  }
+
+  function redrawManatee(m){
+    const g = m.g;
+    g.clear();
+    const s = m.size;
+
+    g.lineStyle({ width: Math.max(2, s*0.08), color: 0x8a7a6a, ...ROUND });
+    g.drawEllipse(0, 0, s, s*0.55);
+
+    g.lineStyle({ width: Math.max(1.5, s*0.06), color: 0x7a6a5a, ...ROUND });
+    g.moveTo(s*0.3, -s*0.35);
+    g.quadraticCurveTo(s*0.5, -s*0.6, s*0.2, -s*0.5);
+
+    const tailWag = Math.sin(m.tailPhase)*s*0.2;
+    g.moveTo(-s*0.8, 0);
+    g.lineTo(-s*1.4, -s*0.3 + tailWag);
+    g.lineTo(-s*1.5, s*0.1 + tailWag);
+    g.lineTo(-s*0.85, s*0.2);
+
+  }
+
 
   return {
-    get active(){ return active; },
-    get _state(){ return M; },
-    get menuOpen(){ return menuOpen; },
-    resetUpgrades,
-    update, updatePlayer, handleKey, fire, look, speedMul, gravityMul, levelBonus, eatMul, depth, command, DUNGEONS, startLochNessEncounter
+    drawFishShape,
+    orient,
+    SHARK_COLORS,
+    schools,
+    spawnSchool,
+    updateSchool,
+    destroySchool,
+    spawnJellyfish,
+    updateJelly,
+    spawnCrab,
+    updateCrab,
+    spawnTurtle,
+    updateTurtle,
+    spawnShark,
+    updateShark,
+    spawnOctopus,
+    updateOctopus,
+    spawnSeahorse,
+    updateSeahorse,
+    spawnStingray,
+    updateStingray,
+    spawnEel,
+    updateEel,
+    spawnStarfish,
+    updateStarfish,
+    spawnSeaUrchin,
+    updateSeaUrchin,
+    spawnPufferfish,
+    updatePufferfish,
+    spawnMantaRay,
+    updateMantaRay,
+    spawnSquid,
+    updateSquid,
+    spawnAnglerfish,
+    updateAnglerfish,
+    spawnNarwhal,
+    updateNarwhal,
+    spawnHammerhead,
+    updateHammerhead,
+    spawnIsopod,
+    updateIsopod,
+    spawnLionfish,
+    updateLionfish,
+    spawnCuttlefish,
+    updateCuttlefish,
+    spawnParrotfish,
+    updateParrotfish,
+    spawnBlobfish,
+    updateBlobfish,
+    spawnSeaDragon,
+    updateSeaDragon,
+    spawnWhale,
+    updateWhale,
+    spawnDolphin,
+    updateDolphin,
+    spawnSwordfish,
+    updateSwordfish,
+    spawnNautilus,
+    updateNautilus,
+    spawnSeaSnake,
+    updateSeaSnake,
+    spawnSunfish,
+    updateSunfish,
+    spawnDumboOctopus,
+    updateDumboOctopus,
+    spawnGoblinShark,
+    updateGoblinShark,
+    spawnOarfish,
+    updateOarfish,
+    spawnManatee,
+    updateManatee
   };
 };
 
